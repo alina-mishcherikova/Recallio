@@ -57,6 +57,17 @@ export async function createUser(sql: Q, o: { email?: string; nativeLanguage?: s
   return row!.id
 }
 
+/** An active session (ADR 0002 §2.3). `ageMs` moves created_at, last_seen_at and expires_at back. */
+export async function createSession(sql: Q, userId: string, o: { ageMs?: number } = {}) {
+  const age = `${Math.floor((o.ageMs ?? 0) / 1000)} seconds`
+  const [row] = await sql<{ id: string }[]>`
+    insert into user_sessions (user_id, created_at, last_seen_at, expires_at)
+    values (${userId}, now() - ${age}::interval, now() - ${age}::interval,
+            now() - ${age}::interval + interval '30 days')
+    returning id`
+  return row!.id
+}
+
 export async function createCollection(
   sql: Q,
   ownerId: string,
@@ -274,12 +285,13 @@ export interface SeededUser {
 }
 
 /**
- * One user with at least one row in every `public` table: collection, entry, meaning, answer,
+ * One user with at least one row in every `public` table: a session, collection, entry, meaning, answer,
  * change log, flag, two cards (one reviewed, so it has a log), a practice attempt, a synonym and a
  * sentence example.
  */
 export async function seedUser(sql: postgres.Sql): Promise<SeededUser> {
   const userId = await createUser(sql)
+  await createSession(sql, userId)
   const collectionId = await createCollection(sql, userId)
   const entryId = await createEntry(sql, collectionId)
   const meaningId = await createMeaning(sql, entryId)

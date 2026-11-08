@@ -1,6 +1,7 @@
 // Black-box security checks against the built server (OWASP A02/A05/A06/A10).
 // Converted from the LEX-001 security review. Runs on the desktop project only.
 import { expect, test } from '@playwright/test'
+import { uniqueClientIpHeaders } from './env'
 
 function directives(csp: string) {
   return Object.fromEntries(
@@ -76,8 +77,60 @@ test.describe('/api/health', () => {
   })
 })
 
-test('unknown API routes return 404 without stack traces or file paths', async ({ request }) => {
+const LEAK = /stack|node_modules|\.output|\/Users\/|at \w+ \(/
+
+// ADR 0002 §6.2 item 5: deny by default before routing, so anonymous callers can't map the API.
+test('unknown API routes return 401 to anonymous callers, without stack traces or file paths', async ({
+  request,
+}) => {
+  for (const path of ['/api/does-not-exist', '/api/auth/login/x', '/api/health/']) {
+    const res = await request.get(path)
+    expect(res.status(), path).toBe(401)
+    expect(await res.json()).toEqual({ statusCode: 401, message: 'Unauthorized' })
+  }
   const res = await request.get('/api/does-not-exist')
-  expect(res.status()).toBe(404)
-  expect(await res.text()).not.toMatch(/stack|node_modules|\.output|\/Users\/|at \w+ \(/)
+  expect(await res.text()).not.toMatch(LEAK)
+})
+
+test('unknown API routes return 404 with a session, without stack traces or file paths', async ({
+  playwright,
+  baseURL,
+}) => {
+  // A dedicated context: the cookie is __Host- (Secure), so it is passed explicitly.
+  const api = await playwright.request.newContext({
+    baseURL,
+    extraHTTPHeaders: { origin: baseURL!, ...uniqueClientIpHeaders() },
+  })
+  try {
+    const email = `e2e-unknown-${Date.now().toString(36)}@example.test`
+    const password = `quiet harbor lamp ${Math.random().toString(36).slice(2, 8)}`
+    const reg = await api.post('/api/auth/register', { data: { email, password, nativeLanguage: 'en' } })
+    expect(reg.status()).toBe(201)
+    const cookie = reg
+      .headersArray()
+      .find((h) => h.name.toLowerCase() === 'set-cookie' && h.value.startsWith('__Host-recallio-session='))
+      ?.value.split(';', 1)[0]
+    expect(cookie).toBeDefined()
+
+    for (const [method, path] of [
+      ['GET', '/api/does-not-exist'],
+      ['POST', '/api/does-not-exist'],
+      ['GET', '/api/auth/me/x'],
+    ] as const) {
+      const res = await api.fetch(path, {
+        method,
+        headers: { cookie: cookie!, 'content-type': 'application/json' },
+        ...(method === 'POST' && { data: {} }),
+      })
+      expect(res.status(), `${method} ${path}`).toBe(404)
+      const text = await res.text()
+      expect(JSON.parse(text)).toEqual({ statusCode: 404, message: 'Not Found' })
+      expect(text).not.toMatch(LEAK)
+    }
+
+    const del = await api.delete('/api/account', { headers: { cookie: cookie! }, data: { password } })
+    expect(del.status()).toBe(204)
+  } finally {
+    await api.dispose()
+  }
 })

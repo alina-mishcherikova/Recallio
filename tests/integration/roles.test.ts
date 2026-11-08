@@ -74,6 +74,8 @@ const MATRIX: Record<string, { table: string[]; updateColumns: string[] }> = {
   answer_change_log: { table: APPEND, updateColumns: [] },
   practice_attempts: { table: APPEND, updateColumns: [] },
   srs_review_logs: { table: APPEND, updateColumns: [] },
+  // ADR 0002 §2.3: sessions are created, read and revoked; only the idle-timeout column is updatable.
+  user_sessions: { table: CONTENT, updateColumns: ['last_seen_at'] },
   srs_cards: {
     table: APPEND,
     updateColumns: [
