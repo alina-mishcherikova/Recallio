@@ -30,6 +30,7 @@
     "nuxt-security": "2.7.0",
     "postgres": "^4.1.0",
     "tailwindcss": "^4.3.5",
+    "ts-fsrs": "6.0.0",
     "vue": "^3.5.44",
     "vue-router": "^5.4.0",
     "zod": "^4.6.7"
