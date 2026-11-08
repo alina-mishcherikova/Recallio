@@ -3,6 +3,7 @@
 // server/services/srs/** are blocked by lint (eslint.config.mjs) and by the database guard (0002).
 export * from './enums'
 export * from './users'
+export * from './sessions'
 export * from './collections'
 export * from './vocabulary'
 export * from './srs'
