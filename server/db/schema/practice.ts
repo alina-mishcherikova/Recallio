@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm'
-import { boolean, check, index, jsonb, pgTable, text, uuid } from 'drizzle-orm/pg-core'
+import { boolean, check, index, integer, jsonb, pgTable, text, uuid } from 'drizzle-orm/pg-core'
 import { tsz } from './_shared'
 import { directionEnum, exerciseTypeEnum, practiceSourceModeEnum } from './enums'
 import { users } from './users'
@@ -20,6 +20,9 @@ export const practiceAttempts = pgTable(
     direction: directionEnum('direction').notNull(),
     sourceMode: practiceSourceModeEnum('source_mode').notNull(),
     submittedAnswer: text('submitted_answer').notNull(),
+    // Snapshot of what was expected, so history stays readable after the entry is edited.
+    expectedAnswer: text('expected_answer').notNull(),
+    entryRevision: integer('entry_revision').notNull(), // entry revision the attempt was graded against
     matchedAnswerId: uuid('matched_answer_id').references(() => acceptedAnswers.id, {
       onDelete: 'set null',
     }),
@@ -33,6 +36,8 @@ export const practiceAttempts = pgTable(
     index('practice_attempts_entry_idx').on(t.entryId),
     index('practice_attempts_matched_answer_idx').on(t.matchedAnswerId),
     check('practice_attempts_submitted_len', sql`char_length(${t.submittedAnswer}) <= 500`),
+    check('practice_attempts_expected_len', sql`char_length(${t.expectedAnswer}) between 1 and 500`),
+    check('practice_attempts_entry_revision_positive', sql`${t.entryRevision} >= 1`),
     // A match implies correct. The reverse can't be required because SET NULL clears the id.
     check('practice_attempts_match_implies_correct', sql`${t.matchedAnswerId} is null or ${t.isCorrect}`),
     check('practice_attempts_diff_array', sql`${t.diff} is null or jsonb_typeof(${t.diff}) = 'array'`),

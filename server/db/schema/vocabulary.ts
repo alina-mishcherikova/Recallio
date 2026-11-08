@@ -26,6 +26,8 @@ export const vocabularyEntries = pgTable(
       .notNull()
       .references(() => collections.id, { onDelete: 'cascade' }),
     targetExpression: text('target_expression').notNull(),
+    // Normalized by shared/answers (LEX-010); used for duplicate detection on create and CSV import.
+    normalizedTargetExpression: text('normalized_target_expression').notNull(),
     nativeExpression: text('native_expression').notNull(),
     partOfSpeech: text('part_of_speech'),
     topic: text('topic'),
@@ -36,7 +38,13 @@ export const vocabularyEntries = pgTable(
   (t) => [
     // keyset pagination: WHERE collection_id = $1 AND (created_at, id) > ($2, $3) ORDER BY created_at, id
     index('vocabulary_entries_collection_page_idx').on(t.collectionId, t.createdAt, t.id),
+    // duplicate lookup: WHERE collection_id = $1 AND normalized_target_expression = ANY($2)
+    index('vocabulary_entries_collection_normalized_idx').on(t.collectionId, t.normalizedTargetExpression),
     check('vocabulary_entries_target_len', sql`char_length(${t.targetExpression}) between 1 and 500`),
+    check(
+      'vocabulary_entries_normalized_target_len',
+      sql`char_length(${t.normalizedTargetExpression}) between 1 and 500`,
+    ),
     check('vocabulary_entries_native_len', sql`char_length(${t.nativeExpression}) between 1 and 500`),
     check(
       'vocabulary_entries_pos_len',
@@ -94,7 +102,8 @@ export const acceptedAnswers = pgTable(
       columns: [t.meaningId, t.entryId],
       foreignColumns: [vocabularyMeanings.id, vocabularyMeanings.entryId],
     }).onDelete('cascade'),
-    index('accepted_answers_entry_language_idx').on(t.entryId, t.language),
+    // Also serves the answer engine lookup (entry_id, language).
+    uniqueIndex('accepted_answers_entry_language_text_key').on(t.entryId, t.language, t.normalizedText),
     index('accepted_answers_meaning_idx').on(t.meaningId),
     uniqueIndex('accepted_answers_one_primary_idx')
       .on(t.entryId, t.language)
@@ -154,7 +163,86 @@ export const answerFlags = pgTable(
   },
   (t) => [
     index('answer_flags_user_status_created_idx').on(t.userId, t.status, t.createdAt),
+    // One open flag per submitted answer; resolved flags are history.
+    uniqueIndex('answer_flags_open_key')
+      .on(t.userId, t.entryId, t.direction, t.submittedAnswer)
+      .where(sql`${t.status} = 'pending'`),
     index('answer_flags_entry_idx').on(t.entryId),
     check('answer_flags_submitted_len', sql`char_length(${t.submittedAnswer}) between 1 and 500`),
+  ],
+)
+
+// Synonyms are attached to a meaning or sense (spec US-MCQ-02). Only approved ones are used later.
+// Owned through the entry; the language must be one of the collection's pair (trigger, 0003).
+export const vocabularySynonyms = pgTable(
+  'vocabulary_synonyms',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    entryId: uuid('entry_id')
+      .notNull()
+      .references(() => vocabularyEntries.id, { onDelete: 'cascade' }),
+    meaningId: uuid('meaning_id'),
+    language: text('language').notNull(),
+    text: text('text').notNull(),
+    normalizedText: text('normalized_text').notNull(),
+    approvalStatus: approvalStatusEnum('approval_status').notNull().default('pending'),
+    createdAt: tsz('created_at').notNull().defaultNow(),
+  },
+  (t) => [
+    foreignKey({
+      name: 'vocabulary_synonyms_meaning_entry_fk',
+      columns: [t.meaningId, t.entryId],
+      foreignColumns: [vocabularyMeanings.id, vocabularyMeanings.entryId],
+    }).onDelete('cascade'),
+    uniqueIndex('vocabulary_synonyms_entry_language_text_key').on(t.entryId, t.language, t.normalizedText),
+    index('vocabulary_synonyms_meaning_idx').on(t.meaningId),
+    check('vocabulary_synonyms_language_code', sql`${t.language} ~ '^[a-z]{2}$'`),
+    check('vocabulary_synonyms_text_len', sql`char_length(${t.text}) between 1 and 500`),
+    check('vocabulary_synonyms_normalized_len', sql`char_length(${t.normalizedText}) between 1 and 500`),
+  ],
+)
+
+/**
+ * Curated example sentences (spec §14.1, US-CTX-01). `slots` holds the explicit answer slots as a
+ * JSON array of `{ "start": int, "end": int, "answer": string }`: character offsets into `sentence`
+ * (end exclusive) and the expected text. One column instead of a child table: slots are only ever
+ * read and written together with their sentence. Zod mirrors the format check.
+ */
+export const sentenceExamples = pgTable(
+  'sentence_examples',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    entryId: uuid('entry_id')
+      .notNull()
+      .references(() => vocabularyEntries.id, { onDelete: 'cascade' }),
+    meaningId: uuid('meaning_id'),
+    language: text('language').notNull(),
+    sentence: text('sentence').notNull(),
+    translation: text('translation'),
+    targetAnswer: text('target_answer').notNull(),
+    slots: jsonb('slots').$type<{ start: number; end: number; answer: string }[]>().notNull(),
+    approvalStatus: approvalStatusEnum('approval_status').notNull().default('pending'),
+    createdAt: tsz('created_at').notNull().defaultNow(),
+  },
+  (t) => [
+    foreignKey({
+      name: 'sentence_examples_meaning_entry_fk',
+      columns: [t.meaningId, t.entryId],
+      foreignColumns: [vocabularyMeanings.id, vocabularyMeanings.entryId],
+    }).onDelete('cascade'),
+    index('sentence_examples_entry_idx').on(t.entryId),
+    index('sentence_examples_meaning_idx').on(t.meaningId),
+    check('sentence_examples_language_code', sql`${t.language} ~ '^[a-z]{2}$'`),
+    check('sentence_examples_sentence_len', sql`char_length(${t.sentence}) between 1 and 1000`),
+    check(
+      'sentence_examples_translation_len',
+      sql`${t.translation} is null or char_length(${t.translation}) between 1 and 1000`,
+    ),
+    check('sentence_examples_target_answer_len', sql`char_length(${t.targetAnswer}) between 1 and 500`),
+    // 1..10 slots; each an object with integer offsets inside the sentence and a non-blank answer.
+    check(
+      'sentence_examples_slots_format',
+      sql`jsonb_typeof(${t.slots}) = 'array' and jsonb_array_length(${t.slots}) between 1 and 10 and octet_length(${t.slots}::text) <= 4096 and not jsonb_path_exists(${t.slots}, '$[*] ? (@.type() != "object" || !(@.start.type() == "number") || !(@.end.type() == "number") || !(@.answer.type() == "string") || @.start != @.start.floor() || @.end != @.end.floor() || @.start < 0 || @.end <= @.start || @.end > $len || @.answer like_regex "^[[:space:]]*$")', jsonb_build_object('len', char_length(${t.sentence})))`,
+    ),
   ],
 )

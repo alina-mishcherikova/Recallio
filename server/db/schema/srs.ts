@@ -1,5 +1,5 @@
 // SRS tables. Writable ONLY from server/services/srs/** (lint rule in eslint.config.mjs) and
-// guarded in the database (migration 0002: grants, pristine-insert, deferred log check).
+// guarded in the database (migration 0002: private grants, pristine insert, exact log ↔ update match).
 import { sql } from 'drizzle-orm'
 import {
   check,
@@ -17,6 +17,10 @@ import { tsz } from './_shared'
 import { directionEnum, srsRatingEnum, srsScheduleStatusEnum, srsStateEnum } from './enums'
 import { users } from './users'
 import { vocabularyEntries } from './vocabulary'
+
+// scheduler_version is pinned to 'ts-fsrs@<semver>/fsrs-<model>', e.g. 'ts-fsrs@6.0.0/fsrs-7'.
+// SRS timestamps have millisecond precision (JS Date): the guard compares them with the jsonb
+// snapshots, which can't carry microseconds.
 
 export const srsCards = pgTable(
   'srs_cards',
@@ -40,8 +44,8 @@ export const srsCards = pgTable(
     reps: integer('reps').notNull().default(0),
     lapses: integer('lapses').notNull().default(0),
     lastReviewAt: tsz('last_review_at'),
-    schedulerVersion: text('scheduler_version').notNull(), // e.g. 'ts-fsrs@6.0.0/fsrs-7'
-    updatedAt: tsz('updated_at').notNull().defaultNow(),
+    schedulerVersion: text('scheduler_version').notNull(),
+    updatedAt: tsz('updated_at').notNull().defaultNow(), // set by the guard triggers
   },
   (t) => [
     unique('srs_cards_user_entry_direction_key').on(t.userId, t.entryId, t.direction),
@@ -62,11 +66,21 @@ export const srsCards = pgTable(
       'srs_cards_counters',
       sql`${t.learningSteps} >= 0 and ${t.reps} >= 0 and ${t.lapses} >= 0 and ${t.lapses} <= ${t.reps}`,
     ),
-    check('srs_cards_scheduler_version_len', sql`char_length(${t.schedulerVersion}) between 1 and 64`),
+    check(
+      'srs_cards_scheduler_version_format',
+      sql`char_length(${t.schedulerVersion}) <= 64 and ${t.schedulerVersion} ~ '^ts-fsrs@[0-9]+[.][0-9]+[.][0-9]+/fsrs-[0-9]+$'`,
+    ),
+    check(
+      'srs_cards_ms_precision',
+      sql`${t.dueAt} = date_trunc('milliseconds', ${t.dueAt}) and (${t.lastReviewAt} is null or ${t.lastReviewAt} = date_trunc('milliseconds', ${t.lastReviewAt}))`,
+    ),
   ],
 )
 
-/** Append-only for the app role. Each row authorizes exactly one card update (migration 0002). */
+/**
+ * Append-only for the app role. Each row authorizes exactly one card update (migration 0002), and
+ * `previous_state` / `next_state` must equal the card before and after it (SRS_SNAPSHOT_KEYS).
+ */
 export const srsReviewLogs = pgTable(
   'srs_review_logs',
   {
@@ -74,26 +88,65 @@ export const srsReviewLogs = pgTable(
     cardId: uuid('card_id')
       .notNull()
       .references(() => srsCards.id, { onDelete: 'cascade' }),
+    // Denormalized for "reviews today" and new-card counts; must equal the card's user (guard, RC001).
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
     clientReviewId: uuid('client_review_id').notNull(),
     rating: srsRatingEnum('rating').notNull(),
     reviewedAt: tsz('reviewed_at').notNull(),
-    previousState: jsonb('previous_state').$type<Record<string, unknown>>().notNull(), // full pre-review card
-    nextState: jsonb('next_state').$type<Record<string, unknown>>().notNull(), // full post-review card
+    entryRevision: integer('entry_revision').notNull(), // entry revision the user reviewed
+    previousState: jsonb('previous_state').$type<SrsCardSnapshot>().notNull(),
+    nextState: jsonb('next_state').$type<SrsCardSnapshot>().notNull(),
     previousDueAt: tsz('previous_due_at').notNull(),
     nextDueAt: tsz('next_due_at').notNull(),
     schedulerVersion: text('scheduler_version').notNull(),
   },
   (t) => [
-    uniqueIndex('srs_review_logs_client_review_id_key').on(t.clientReviewId),
+    // Idempotency is per card: one user's client id can never block or reveal another user's review.
+    uniqueIndex('srs_review_logs_card_client_review_id_key').on(t.cardId, t.clientReviewId),
     index('srs_review_logs_card_reviewed_idx').on(t.cardId, t.reviewedAt),
+    index('srs_review_logs_user_reviewed_idx').on(t.userId, t.reviewedAt),
     check(
       'srs_review_logs_states_objects',
       sql`jsonb_typeof(${t.previousState}) = 'object' and jsonb_typeof(${t.nextState}) = 'object'`,
     ),
     check('srs_review_logs_due_order', sql`${t.nextDueAt} >= ${t.reviewedAt}`),
-    check('srs_review_logs_scheduler_version_len', sql`char_length(${t.schedulerVersion}) between 1 and 64`),
+    check('srs_review_logs_entry_revision_positive', sql`${t.entryRevision} >= 1`),
+    check(
+      'srs_review_logs_scheduler_version_format',
+      sql`char_length(${t.schedulerVersion}) <= 64 and ${t.schedulerVersion} ~ '^ts-fsrs@[0-9]+[.][0-9]+[.][0-9]+/fsrs-[0-9]+$'`,
+    ),
+    check('srs_review_logs_ms_precision', sql`${t.reviewedAt} = date_trunc('milliseconds', ${t.reviewedAt})`),
   ],
 )
+
+/**
+ * Keys of the `previous_state` / `next_state` snapshots: the 12 scheduling columns as Drizzle
+ * properties (camelCase). Values are the stored ones: enum labels, ISO 8601 timestamps with
+ * milliseconds, numbers, and null for an absent stabilityFast / lastReviewAt. The guard rejects a
+ * snapshot with missing or extra keys, or with any value that differs from the card (SR002).
+ */
+export const SRS_SNAPSHOT_KEYS = [
+  'state',
+  'scheduleStatus',
+  'dueAt',
+  'stability',
+  'stabilityFast',
+  'difficulty',
+  'scheduledDays',
+  'learningSteps',
+  'reps',
+  'lapses',
+  'lastReviewAt',
+  'schedulerVersion',
+] as const satisfies readonly (keyof typeof srsCards.$inferSelect)[]
+
+type CardRow = typeof srsCards.$inferSelect
+export type SrsCardSnapshot = Omit<
+  Pick<CardRow, (typeof SRS_SNAPSHOT_KEYS)[number]>,
+  'dueAt' | 'lastReviewAt'
+> & { dueAt: string; lastReviewAt: string | null }
 
 /**
  * ts-fsrs `DefaultScheduler` card key → `srsCards` property. Storage must be lossless:
