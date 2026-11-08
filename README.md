@@ -1,75 +1,69 @@
-# Nuxt Minimal Starter
+# Recallio
 
-Look at the [Nuxt documentation](https://nuxt.com/docs/getting-started/introduction) to learn more.
+Vocabulary learning web app: FSRS spaced repetition plus independent practice modes
+(typing, multiple choice, and more). Desktop and mobile web.
+
+- Product spec: [`docs/spec.md`](docs/spec.md)
+- Architecture and security baseline: [`docs/architecture.md`](docs/architecture.md)
+
+## Requirements
+
+- **Node.js 24 LTS** (see `.nvmrc`; Node 26+ also works). Odd-numbered releases such as Node 25 are not supported.
+- **pnpm 12** (`corepack enable` installs the version pinned in `package.json`)
+- **Docker** (local PostgreSQL 17)
 
 ## Setup
 
-Make sure to install dependencies:
-
 ```bash
-# npm
-npm install
-
-# pnpm
 pnpm install
-
-# yarn
-yarn install
-
-# bun
-bun install
+cp .env.example .env        # then change POSTGRES_PASSWORD and NUXT_DATABASE_URL
+pnpm db:up                  # start PostgreSQL in Docker (bound to 127.0.0.1)
+pnpm db:migrate             # apply migrations
+pnpm dev                    # http://localhost:3000
 ```
 
-## Development Server
+`pnpm dev` and drizzle-kit read `.env` automatically. `pnpm test:e2e` runs the built server, which doesn't, so
+export the variables first: `set -a; . ./.env; set +a`.
 
-Start the development server on `http://localhost:3000`:
+## Commands
 
-```bash
-# npm
-npm run dev
+| Command                             | What it does                                                                           |
+| ----------------------------------- | -------------------------------------------------------------------------------------- |
+| `pnpm dev`                          | Dev server with HMR                                                                    |
+| `pnpm build` / `pnpm preview`       | Production build / preview it                                                          |
+| `pnpm db:up` / `pnpm db:down`       | Start / stop local PostgreSQL                                                          |
+| `pnpm db:generate`                  | Generate a migration from `server/db/schema` changes                                   |
+| `pnpm db:migrate`                   | Apply migrations                                                                       |
+| `pnpm db:studio`                    | Drizzle Studio (browse the local DB)                                                   |
+| `pnpm lint` / `pnpm lint:fix`       | ESLint (Nuxt + security rules)                                                         |
+| `pnpm format` / `pnpm format:check` | Prettier                                                                               |
+| `pnpm typecheck`                    | `vue-tsc` via `nuxt typecheck`                                                         |
+| `pnpm test`                         | Vitest: `unit` (Node) and `nuxt` (Nuxt runtime) projects                               |
+| `pnpm test:e2e`                     | Playwright on desktop and mobile, with axe accessibility checks (builds the app first) |
+| `pnpm audit:prod`                   | Dependency audit; fails on high or critical findings                                   |
+| `pnpm check`                        | format check + lint + typecheck + unit tests                                           |
 
-# pnpm
-pnpm dev
+## Environment variables
 
-# yarn
-yarn dev
+| Name                                                                    | Purpose                                                                                    |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `NUXT_DATABASE_URL`                                                     | PostgreSQL connection string. Production **must** include `sslmode=require` (or stricter). |
+| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` / `POSTGRES_PORT` | Local Docker database only                                                                 |
 
-# bun
-bun run dev
+The server validates its environment at startup and refuses to start if it's invalid. A built server
+with no `NODE_ENV` set applies production rules.
+
+## Project layout
+
+```
+app/        Nuxt client: pages, components, composables
+server/     Nitro API routes, services, Drizzle schema + migrations
+shared/     Code used by client and server: schemas, answer engine
+tests/      unit/, nuxt/, e2e/
+docs/       Specification, architecture, decisions
+.claude/    Claude Code agents and hooks used to develop this project
 ```
 
-## Production
+## Known limitations (MVP)
 
-Build the application for production:
-
-```bash
-# npm
-npm run build
-
-# pnpm
-pnpm build
-
-# yarn
-yarn build
-
-# bun
-bun run build
-```
-
-Locally preview production build:
-
-```bash
-# npm
-npm run preview
-
-# pnpm
-pnpm preview
-
-# yarn
-yarn preview
-
-# bun
-bun run preview
-```
-
-Check out the [deployment documentation](https://nuxt.com/docs/getting-started/deployment) for more information.
+- There is no email verification or password reset, so a forgotten password can't be recovered.
