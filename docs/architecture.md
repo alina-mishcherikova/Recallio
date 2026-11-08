@@ -1,10 +1,10 @@
 # Recallio — Architecture
 
-**Status:** Draft for approval · **Date:** 2026-11-08 · **Spec:** [`docs/spec.md`](./spec.md) (v1.1)
+**Status:** Approved decisions applied — awaiting final approval · **Date:** 2026-11-08 · **Spec:** [`docs/spec.md`](./spec.md) (v1.1)
 
 This document describes how Recallio is built: the stack, the code structure, the data model, the
 rules that protect FSRS scheduling, and the development workflow (agents, git, quality gates).
-Open questions are listed at the end (§12). They must be answered before implementation starts.
+Decisions are recorded in §12. Hosting is the only open question left.
 
 ---
 
@@ -21,7 +21,8 @@ Open questions are listed at the end (§12). They must be answered before implem
 | Auth | **nuxt-auth-utils** | Sealed cookie sessions, scrypt password hashing (`hashPassword`), `requireUserSession`. |
 | Scheduling | **ts-fsrs v6** (FSRS-7 default), version pinned exactly | Established implementation, deterministic when fuzz is disabled. |
 | CSV | **papaparse** | Handles delimiter detection, quoted fields, and UTF-8. |
-| UI | **Tailwind CSS v4 + Nuxt UI v4** (see Q1) | Accessible primitives (Reka UI), responsive, keyboard-friendly. |
+| UI | **Nuxt UI v4** (Tailwind CSS v4) | Accessible primitives (Reka UI), responsive, keyboard-friendly. |
+| Security headers | **nuxt-security** | CSP, HSTS, X-Frame-Options, request size limits, rate limiting (§8). |
 | Tests | **Vitest** (`@nuxt/test-utils`) + **Playwright** | Unit, integration (real Postgres), and E2E/responsive tests. |
 | Lint / format | **ESLint (`@nuxt/eslint`) + Prettier**, `vue-tsc` typecheck | Run by hooks and CI. |
 | CI | **GitHub Actions** | Lint, typecheck, tests on every PR. |
@@ -79,7 +80,7 @@ practice-type modules, so they get **no** write access to SRS.
 Spec §14 is the baseline. The additions below are needed to meet the acceptance criteria.
 
 ```
-users(id uuid pk, email citext unique, password_hash, native_language, daily_new_limit int default 20,
+users(id uuid pk, email citext unique, password_hash, native_language,  -- languages: ISO 639-1 daily_new_limit int default 20,
       daily_review_limit int default 200, timezone text, created_at, deleted_at)
 collections(id, owner_id → users, title, native_language, target_language, description, topic,
             normalization jsonb, archived_at, created_at)          CHECK native_language <> target_language
@@ -100,6 +101,9 @@ practice_attempts(id, user_id, entry_id, exercise_type, direction, source_mode, 
                   matched_answer_id, is_correct, diff jsonb, session_id, created_at)
 ```
 
+- **Languages** are stored as ISO 639-1 codes (`fr`, `en`, ...), validated against an allow-list in
+  `shared/constants/languages.ts`. The launch allow-list is **`fr` and `en`**. Adding a language
+  means adding it to that list, with no schema change.
 - **Direction** is an enum: `recognition` (target → native) and `production` (native → target).
 - **Normalization config** is stored per collection, with defaults for case, accents, punctuation,
   and whitespace (US-VOC-04).
@@ -182,21 +186,43 @@ Activity types are kept separate in storage (spec §12):
 Every row records the source mode, exercise type, direction, timestamp, and outcome. Analytics only
 reads, and labels practice accuracy and FSRS retention as different metrics.
 
-## 8. Security, privacy, accessibility
+## 8. Security (OWASP), privacy, accessibility
 
-- **Ownership:** every service function takes `userId`, and queries filter by owner, either through
-  a join to `collections.owner_id` or through `user_id`. A shared `requireOwner()` helper returns 404
-  for other users' resources rather than 403, so their existence isn't revealed.
-- **Input:** Zod validation on every handler. Request bodies are size-limited, and CSV uploads are
-  capped (5 MB / 10k rows, see Q4).
-- **Abuse protection:** per-user rate limits on auth, review, practice, and import endpoints.
-- **Sessions:** HTTP-only, SameSite=Lax, secure cookies. Mutating requests check origin (CSRF).
-  HTTPS in production.
-- **GDPR:** account deletion removes all user-owned rows, and the retention policy is documented in
-  `docs/privacy.md`.
-- **Accessibility:** WCAG 2.2 AA. Includes visible focus, keyboard shortcuts in Review (Space =
-  reveal, 1–4 = rating), touch targets of at least 44px, and `dvh`/`visualViewport` handling so
-  inputs stay visible above the mobile keyboard. axe checks run in Playwright.
+**Target:** [OWASP Top 10 (2025)](https://owasp.org/Top10/) fully covered, with
+[OWASP ASVS 5.0](https://owasp.org/www-project-application-security-verification-standard/)
+**Level 2** as the verification checklist. Every PR is checked against this section by the
+`security` agent (§9).
+
+| OWASP risk | Controls in Recallio |
+| --- | --- |
+| **A01 Broken Access Control** | Every service takes `userId`. Queries are scoped by owner through `collections.owner_id` or `user_id`. The `requireOwner()` helper returns 404 (not 403) for other users' resources. Deny by default: all `/api/**` routes require a session except an explicit public allow-list (`/api/auth/register`, `/api/auth/login`). Integration tests check that user B can't access user A's data on every route (IDOR tests). UUIDs are used, but ownership checks never rely on IDs being hard to guess. |
+| **A02 Security Misconfiguration** | `nuxt-security` sets a strict CSP (no `unsafe-inline` scripts, nonces), HSTS, `X-Content-Type-Options`, `Referrer-Policy`, `frame-ancestors 'none'`, and a `Permissions-Policy`. Production builds have no stack traces, no source maps served publicly, and no devtools. CORS stays same-origin only. Secrets come only from env vars, validated at boot with Zod, and are never committed (`.env` is git-ignored, `.env.example` lists names only). |
+| **A03 Software Supply Chain** | `pnpm` with a committed lockfile and exact versions for security-relevant packages (ts-fsrs, auth). CI runs `pnpm audit --prod` and fails on high/critical findings. Dependabot handles updates, GitHub secret scanning and push protection are enabled, and GitHub Actions are pinned to commit SHAs. New dependencies need justification in the PR. |
+| **A04 Cryptographic Failures** | Passwords are hashed with scrypt (nuxt-auth-utils `hashPassword`), never logged or returned. The session cookie is sealed (iron) with a random secret of 32+ chars, and is `HttpOnly`, `Secure`, `SameSite=Lax`. TLS everywhere in production, including the DB connection (`sslmode=require`). No sensitive data in URLs or localStorage. |
+| **A05 Injection** | Drizzle uses parameterized queries only. Raw `sql` templates must use bound parameters, and `sql.raw()` is banned by a lint rule. Zod validates every body, query, and route param (types, lengths, enums, `strict()` to reject unknown keys). Vue escapes output by default, and `v-html` is banned by a lint rule. CSV cells starting with `= + - @` are neutralized on any future export (formula injection). |
+| **A06 Insecure Design** | Threat model per epic (written by `architect`). SRS isolation is enforced in four layers (§5). Business limits (daily limits, import caps) are enforced server-side. Destructive actions need confirmation and re-checked ownership. |
+| **A07 Authentication Failures** | Password policy follows NIST 800-63B: at least 12 chars, up to 128, no composition rules, checked against a common-password list. Login is rate-limited per IP and per account, with exponential backoff. Login and register return generic errors so they don't reveal which emails exist. The session is rotated on login and destroyed on logout. Idle timeout is 7 days and absolute timeout is 30 days. |
+| **A08 Software / Data Integrity** | CSRF: `SameSite=Lax` cookie, plus an `Origin`/`Sec-Fetch-Site` check on every mutating request, plus a CSRF token (`nuxt-security` CSRF). Review submissions are idempotent (`clientReviewId`). DB constraints and the trigger protect SRS integrity. Migrations are reviewed in PRs and never edited after merge. |
+| **A09 Logging & Alerting** | Structured JSON logs record auth successes and failures, access-denied events, rate-limit hits, import results, and account deletion, each with the user id and a request id. Passwords, session tokens, cookies, and full request bodies are never logged. |
+| **A10 Exceptional Conditions** | A central error handler maps errors to safe messages (`{ statusCode, message }`) with no internals. Transactions roll back on any error, and the default is fail-closed: if an ownership or validation check throws, the request is denied. Timeouts and limits apply to DB queries, body size (1 MB, 5 MB for CSV), and CSV row count (10,000). |
+
+**Also part of secure coding:**
+- **Abuse protection:** per-user and per-IP rate limits on auth, review, practice, and import endpoints.
+- **Least privilege:** the app's DB role can't run DDL. Migrations run with a separate role in CI/deploy.
+- **CSV import:** check MIME type and extension, enforce UTF-8, never execute or eval content, and
+  treat every cell as plain text.
+- **Account recovery:** email verification and password reset are **out of MVP scope** (decision
+  2026-11-08). Accepted risk: a user who forgets their password can't recover the account. This is
+  documented in the README and is planned for a later release.
+- **Static checks in CI:** `eslint-plugin-security`, GitHub CodeQL, `pnpm audit`, gitleaks.
+
+**Privacy (GDPR):** account deletion hard-deletes all user-owned rows in one transaction. Data
+minimization: only email, password hash, and learning data are stored. Retention is documented in
+`docs/privacy.md`.
+
+**Accessibility:** WCAG 2.2 AA. Includes visible focus, keyboard shortcuts in Review (Space =
+reveal, 1–4 = rating), touch targets of at least 44px, and `dvh`/`visualViewport` handling so inputs
+stay visible above the mobile keyboard. axe checks run in Playwright.
 
 ## 9. Development workflow — agents
 
@@ -209,6 +235,7 @@ The main Claude session acts as the **orchestrator**. It reads an issue, calls t
 | `backend` | `server/**`, `shared/**`, Drizzle schema and migrations | Yes |
 | `frontend` | `app/**`: pages, components, composables, accessibility | Yes |
 | `tester` | Writes and runs Vitest/Playwright tests, reviews the diff for bugs and spec violations | Tests only |
+| `security` | Reviews every diff against §8 (OWASP Top 10 / ASVS L2), runs audit tools, writes abuse-case tests | Tests only |
 | `docs` | README, CLAUDE.md, API docs, `docs/` after each feature | Docs only |
 
 **Flow per issue:**
@@ -218,7 +245,7 @@ issue LEX-xxx
   → architect: plan  ──► orchestrator shows plan to Alina if it involves a big decision
   → create branch  feat/lex-xxx-short-name
   → backend ∥ frontend   (parallel when files don't overlap; contract = shared/schemas)
-  → tester: tests + review   ──► fix loop until green
+  → tester: tests + review  ∥  security: OWASP review   ──► fix loop until green
   → docs: update docs
   → conventional commits → push → PR (Closes #n) → Alina reviews & merges
 ```
@@ -247,16 +274,14 @@ issue LEX-xxx
 | Playwright E2E + responsive (mobile/desktop) + axe | CI on PRs touching `app/**` |
 | Mandatory test suites from spec §15 | Normalization, FSRS, review persistence, SRS/practice separation, CSV import |
 
-## 12. Open questions (need answers before LEX-001)
+## 12. Decisions log
 
-1. **UI library:** Nuxt UI v4 (accessible, fast to build with) or plain Tailwind with custom
-   components?
-2. **Hosting:** Vercel + Neon Postgres (serverless, free tier), or a single Node server on Fly.io or
-   Railway with managed Postgres? This affects rate limiting and DB connection pooling.
-3. **Languages supported at launch:** a fixed list (for example uk, en, fr, de, es) or any ISO 639-1
-   code?
-4. **CSV limits:** are 5 MB / 10,000 rows per import acceptable?
-5. **Email:** is email verification and password reset needed in the MVP, or only register and
-   login as the spec states?
-6. **GitHub issues:** should I create the 18 MVP issues (LEX-001 → LEX-018) and 6 milestones in the
-   repo?
+| # | Question | Decision (2026-11-08) |
+| --- | --- | --- |
+| 1 | UI library | **Nuxt UI v4** |
+| 2 | Hosting | **Open.** Options: Vercel + Neon, or Fly.io / Railway. Needed before LEX-017. |
+| 3 | Languages | ISO 639-1 codes with an allow-list. **`fr` and `en`** at launch. |
+| 4 | CSV limits | **5 MB / 10,000 rows** |
+| 5 | Email verification and password reset | **Not in MVP** (accepted risk, §8) |
+| 6 | GitHub issues | **Yes:** create LEX-001 → LEX-018 with 6 milestones |
+| 7 | Security baseline | **OWASP Top 10 (2025) + ASVS L2**, enforced in review and CI (§8) |
