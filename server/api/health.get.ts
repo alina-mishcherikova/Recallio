@@ -1,13 +1,26 @@
 import { sql } from 'drizzle-orm'
 import { useDb } from '../db/client'
 
-// Public liveness/readiness probe. Returns no version, hostnames, or error details (OWASP A02/A10).
+// Public readiness probe (on the public allow-list, docs/architecture.md §8).
+// Returns no version, hostnames, or error details (OWASP A02/A10). The DB result is cached for 5 s
+// so unauthenticated traffic can't turn this route into a DB load generator (OWASP A06).
+const CACHE_MS = 5_000
+let cached: { ok: boolean; at: number } | undefined
+
 export default defineEventHandler(async (event) => {
-  try {
-    await useDb().execute(sql`select 1`)
-    return { status: 'ok', database: 'ok' }
-  } catch {
+  if (!cached || Date.now() - cached.at > CACHE_MS) {
+    const ok = await useDb()
+      .execute(sql`select 1`)
+      .then(
+        () => true,
+        () => false,
+      )
+    cached = { ok, at: Date.now() }
+  }
+  setResponseHeader(event, 'cache-control', 'no-store')
+  if (!cached.ok) {
     setResponseStatus(event, 503)
     return { status: 'degraded', database: 'unavailable' }
   }
+  return { status: 'ok', database: 'ok' }
 })

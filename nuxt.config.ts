@@ -16,6 +16,8 @@ export default defineNuxtConfig({
   // (server/plugins/00.env.ts). Never put secrets in `public`.
   runtimeConfig: {
     databaseUrl: '',
+    // Header set by a trusted reverse proxy (e.g. 'fly-client-ip'). Empty = use the socket address.
+    trustedIpHeader: '',
     public: {},
   },
 
@@ -33,8 +35,9 @@ export default defineNuxtConfig({
         'form-action': ["'self'"],
         'img-src': ["'self'", 'data:'],
         'font-src': ["'self'"],
-        'style-src': ["'self'", "'unsafe-inline'"], // required by Nuxt UI runtime styles
+        'style-src': ["'self'", "'nonce-{{nonce}}'"],
         'script-src': ["'self'", "'strict-dynamic'", "'nonce-{{nonce}}'"],
+        'script-src-attr': ["'none'"],
         'connect-src': ["'self'"],
         'upgrade-insecure-requests': process.env.NODE_ENV === 'production',
       },
@@ -60,7 +63,9 @@ export default defineNuxtConfig({
     },
     rateLimiter: {
       tokensPerInterval: 150,
-      interval: 300_000, // per 5 min per IP — stricter per-route limits come with LEX-003
+      interval: 300_000, // per route, per trusted client IP (server/plugins/01.client-ip.ts).
+      // In-memory per process: switch to a shared driver before running >1 instance. Per-account
+      // auth limits come with LEX-003.
     },
     hidePoweredBy: true,
     corsHandler: false, // same-origin only
