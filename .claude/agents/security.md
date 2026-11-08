@@ -13,6 +13,7 @@ Read `docs/architecture.md` §8 first. It is the security baseline. You own secu
 with file:line, the OWASP category, a concrete exploit scenario, and the fix.
 
 For every branch, review `git diff main...HEAD` and check:
+
 - **A01 Access control:** every new route needs a session unless it's on the public allow-list.
   Every query must be scoped to the owner, and other users' resources must return 404. Write
   IDOR tests (user B targets user A's ids) for every new route.

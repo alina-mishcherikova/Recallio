@@ -3,15 +3,55 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "build": "nuxt build",
     "dev": "nuxt dev",
-    "generate": "nuxt generate",
+    "build": "nuxt build",
     "preview": "nuxt preview",
-    "postinstall": "nuxt prepare"
+    "postinstall": "nuxt prepare",
+    "db:up": "docker compose up -d --wait db",
+    "db:down": "docker compose down",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:studio": "drizzle-kit studio",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "nuxt typecheck",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "audit:prod": "pnpm audit --prod --audit-level high",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test"
   },
   "dependencies": {
+    "@nuxt/ui": "^4.12.0",
+    "drizzle-orm": "^0.45.4",
     "nuxt": "^4.6.4",
+    "nuxt-security": "2.7.0",
+    "postgres": "^4.1.0",
+    "tailwindcss": "^4.3.5",
     "vue": "^3.5.44",
-    "vue-router": "^5.4.0"
-  }
+    "vue-router": "^5.4.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
+    "@nuxt/eslint": "^1.17.0",
+    "@nuxt/test-utils": "^4.3.4",
+    "@playwright/test": "^1.65.0",
+    "@vue/test-utils": "^2.5.1",
+    "drizzle-kit": "^0.31.11",
+    "eslint": "^10.14.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-security": "^4.2.1",
+    "happy-dom": "^21.0.4",
+    "prettier": "^3.9.10",
+    "typescript": "~6.0.3",
+    "vitest": "^5.1.0",
+    "vue-tsc": "^3.3.14"
+  },
+  "engines": {
+    "node": "^24.11.0 || >=26.0.0"
+  },
+  "packageManager": "pnpm@12.11.2"
 }

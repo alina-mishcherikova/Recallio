@@ -11,6 +11,7 @@ Before planning, read `docs/spec.md` (the relevant user stories), `docs/architec
 and any related ADRs in `docs/decisions/`. Then inspect the current code.
 
 Produce a plan with these sections:
+
 1. **Scope:** which user stories and acceptance criteria this issue satisfies (quote the IDs).
 2. **Contracts:** Zod schemas in `shared/schemas`, API routes (method, path, request/response),
    and DB schema changes with migration notes. Contracts must be defined before backend and frontend
