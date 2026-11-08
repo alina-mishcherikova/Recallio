@@ -71,8 +71,8 @@ export async function createCollection(
 
 export async function createEntry(sql: Q, collectionId: string) {
   const [row] = await sql<{ id: string }[]>`
-    insert into vocabulary_entries (collection_id, target_expression, native_expression)
-    values (${collectionId}, 'le chat', 'the cat')
+    insert into vocabulary_entries (collection_id, target_expression, normalized_target_expression, native_expression)
+    values (${collectionId}, 'le chat', 'le chat', 'the cat')
     returning id`
   return row!.id
 }
@@ -84,13 +84,69 @@ export async function createMeaning(sql: Q, entryId: string) {
   return row!.id
 }
 
+let answerSeq = 0
+
 export async function createAnswer(
   sql: Q,
-  o: { entryId: string; meaningId?: string | null; language?: string; isPrimary?: boolean },
+  o: {
+    entryId: string
+    meaningId?: string | null
+    language?: string
+    isPrimary?: boolean
+    text?: string
+  },
 ) {
+  // Unique per call by default: (entry_id, language, normalized_text) is unique.
+  const text = o.text ?? `le chat ${++answerSeq}`
   const [row] = await sql<{ id: string }[]>`
     insert into accepted_answers (entry_id, meaning_id, language, answer_text, normalized_text, is_primary)
-    values (${o.entryId}, ${o.meaningId ?? null}, ${o.language ?? 'fr'}, 'Le chat', 'le chat', ${o.isPrimary ?? false})
+    values (${o.entryId}, ${o.meaningId ?? null}, ${o.language ?? 'fr'}, ${text}, ${text.toLowerCase()}, ${o.isPrimary ?? false})
+    returning id`
+  return row!.id
+}
+
+export async function createSynonym(
+  sql: Q,
+  o: { entryId: string; meaningId?: string | null; language?: string; text?: string },
+) {
+  const text = o.text ?? `le matou ${++answerSeq}`
+  const [row] = await sql<{ id: string }[]>`
+    insert into vocabulary_synonyms (entry_id, meaning_id, language, text, normalized_text)
+    values (${o.entryId}, ${o.meaningId ?? null}, ${o.language ?? 'fr'}, ${text}, ${text.toLowerCase()})
+    returning id`
+  return row!.id
+}
+
+export const EXAMPLE_SENTENCE = 'Le chat dort sur le canapé.'
+export const EXAMPLE_SLOTS = [{ start: 0, end: 7, answer: 'Le chat' }]
+
+export async function createExample(
+  sql: Q,
+  o: { entryId: string; meaningId?: string | null; language?: string; slots?: unknown },
+) {
+  const [row] = await sql<{ id: string }[]>`
+    insert into sentence_examples (entry_id, meaning_id, language, sentence, translation, target_answer, slots)
+    values (${o.entryId}, ${o.meaningId ?? null}, ${o.language ?? 'fr'}, ${EXAMPLE_SENTENCE},
+            'The cat sleeps on the sofa.', 'Le chat', ${json(sql, o.slots ?? EXAMPLE_SLOTS)})
+    returning id`
+  return row!.id
+}
+
+export async function createAttempt(
+  sql: Q,
+  o: {
+    userId: string
+    entryId: string
+    matchedAnswerId?: string | null
+    isCorrect?: boolean
+    entryRevision?: number
+  },
+) {
+  const [row] = await sql<{ id: string }[]>`
+    insert into practice_attempts (user_id, entry_id, exercise_type, direction, source_mode, submitted_answer,
+                                   expected_answer, entry_revision, matched_answer_id, is_correct, session_id)
+    values (${o.userId}, ${o.entryId}, 'typing', 'production', 'typing', 'le chat', 'le chat',
+            ${o.entryRevision ?? 1}, ${o.matchedAnswerId ?? null}, ${o.isCorrect ?? false}, ${randomUUID()})
     returning id`
   return row!.id
 }
@@ -114,6 +170,9 @@ export async function getCard(sql: Q, id: string) {
 
 export interface LogInput {
   cardId: string
+  /** Defaults to the card's user (looked up in the same statement). */
+  userId?: string
+  entryRevision?: number
   previousDueAt: Date
   nextDueAt: Date
   reviewedAt?: Date
@@ -126,14 +185,37 @@ export interface LogInput {
 
 export async function insertLog(sql: Q, o: LogInput) {
   const [row] = await sql<{ id: string }[]>`
-    insert into srs_review_logs (card_id, client_review_id, rating, reviewed_at, previous_state,
-                                 next_state, previous_due_at, next_due_at, scheduler_version)
-    values (${o.cardId}, ${o.clientReviewId ?? randomUUID()}, ${o.rating ?? 'good'},
+    insert into srs_review_logs (card_id, user_id, entry_revision, client_review_id, rating, reviewed_at,
+                                 previous_state, next_state, previous_due_at, next_due_at, scheduler_version)
+    values (${o.cardId}, coalesce(${o.userId ?? null}::uuid, (select user_id from srs_cards where id = ${o.cardId})), ${o.entryRevision ?? 1}, ${o.clientReviewId ?? randomUUID()}, ${o.rating ?? 'good'},
             ${o.reviewedAt ?? o.previousDueAt}, ${json(sql, o.previousState ?? {})},
             ${json(sql, o.nextState ?? {})}, ${o.previousDueAt}, ${o.nextDueAt},
             ${o.schedulerVersion ?? SCHEDULER_VERSION})
     returning id`
   return row!.id
+}
+
+const iso = (d: unknown) => (d === null || d === undefined ? null : (d as Date).toISOString())
+
+/**
+ * The log snapshot format (server/db/schema/srs.ts SRS_SNAPSHOT_KEYS): the 12 scheduling columns as
+ * camelCase keys, ISO timestamps. The guard requires previous_state / next_state to equal the card.
+ */
+export function toSnapshot(card: Row): Record<string, unknown> {
+  return {
+    state: card.state,
+    scheduleStatus: card.schedule_status,
+    dueAt: iso(card.due_at),
+    stability: card.stability,
+    stabilityFast: card.stability_fast,
+    difficulty: card.difficulty,
+    scheduledDays: card.scheduled_days,
+    learningSteps: card.learning_steps,
+    reps: card.reps,
+    lapses: card.lapses,
+    lastReviewAt: iso(card.last_review_at),
+    schedulerVersion: card.scheduler_version,
+  }
 }
 
 /** A plausible post-review card (FSRS-7 "good" on a new card). */
@@ -169,8 +251,8 @@ export async function applyReview(tx: Q, cardId: string, patch: Row = {}, log: P
     nextDueAt: next.due_at as Date,
     reviewedAt: card!.due_at,
     schedulerVersion: next.scheduler_version as string,
-    previousState: card,
-    nextState: next,
+    previousState: toSnapshot(card as unknown as Row),
+    nextState: toSnapshot({ ...card, ...next }),
     ...log,
   })
   await tx`update srs_cards set ${tx(next)} where id = ${cardId}`
@@ -193,7 +275,8 @@ export interface SeededUser {
 
 /**
  * One user with at least one row in every `public` table: collection, entry, meaning, answer,
- * change log, flag, two cards (one reviewed, so it has a log), and a practice attempt.
+ * change log, flag, two cards (one reviewed, so it has a log), a practice attempt, a synonym and a
+ * sentence example.
  */
 export async function seedUser(sql: postgres.Sql): Promise<SeededUser> {
   const userId = await createUser(sql)
@@ -210,10 +293,9 @@ export async function seedUser(sql: postgres.Sql): Promise<SeededUser> {
   const recognition = await createCard(sql, { userId, entryId, direction: 'recognition' })
   const production = await createCard(sql, { userId, entryId, direction: 'production' })
   await reviewCard(sql, recognition.id)
-  await sql`
-    insert into practice_attempts (user_id, entry_id, exercise_type, direction, source_mode,
-                                   submitted_answer, matched_answer_id, is_correct, session_id)
-    values (${userId}, ${entryId}, 'typing', 'production', 'typing', 'le chat', ${answerId}, true, ${randomUUID()})`
+  await createAttempt(sql, { userId, entryId, matchedAnswerId: answerId, isCorrect: true })
+  await createSynonym(sql, { entryId, meaningId })
+  await createExample(sql, { entryId, meaningId })
   return {
     userId,
     collectionId,

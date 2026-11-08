@@ -7,21 +7,73 @@ import { connectAs, expectPgError, publicTables } from './helpers/db'
 const app = connectAs('app')
 const migrator = connectAs('migrator')
 
-const CRUD = ['SELECT', 'INSERT', 'UPDATE', 'DELETE']
+// UPDATE is always column-level (security H1): keys, owner/parent columns and created_at never.
+const CONTENT = ['SELECT', 'INSERT', 'DELETE']
 const APPEND = ['SELECT', 'INSERT']
 const ALL_PRIVILEGES = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER']
 
 /** ADR 0001 §4.2. Every table in `public` must be listed: a new table without a decision fails. */
-const MATRIX: Record<string, { table: string[]; updateColumns?: string[] }> = {
-  users: { table: CRUD },
-  collections: { table: CRUD },
-  vocabulary_entries: { table: CRUD },
-  vocabulary_meanings: { table: CRUD },
-  accepted_answers: { table: CRUD },
-  answer_flags: { table: CRUD },
-  answer_change_log: { table: APPEND },
-  practice_attempts: { table: APPEND },
-  srs_review_logs: { table: APPEND },
+const MATRIX: Record<string, { table: string[]; updateColumns: string[] }> = {
+  users: {
+    table: CONTENT,
+    updateColumns: [
+      'email',
+      'password_hash',
+      'native_language',
+      'daily_new_limit',
+      'daily_review_limit',
+      'timezone',
+    ],
+  },
+  collections: {
+    table: CONTENT,
+    updateColumns: [
+      'title',
+      'native_language',
+      'target_language',
+      'description',
+      'topic',
+      'normalization',
+      'archived_at',
+    ],
+  },
+  vocabulary_entries: {
+    table: CONTENT,
+    updateColumns: [
+      'target_expression',
+      'normalized_target_expression',
+      'native_expression',
+      'part_of_speech',
+      'topic',
+      'revision',
+      'updated_at',
+    ],
+  },
+  vocabulary_meanings: { table: CONTENT, updateColumns: ['definition', 'grammatical_metadata'] },
+  accepted_answers: {
+    table: CONTENT,
+    updateColumns: ['meaning_id', 'language', 'answer_text', 'normalized_text', 'is_primary'],
+  },
+  answer_flags: { table: CONTENT, updateColumns: ['status'] },
+  vocabulary_synonyms: {
+    table: CONTENT,
+    updateColumns: ['meaning_id', 'language', 'text', 'normalized_text', 'approval_status'],
+  },
+  sentence_examples: {
+    table: CONTENT,
+    updateColumns: [
+      'meaning_id',
+      'language',
+      'sentence',
+      'translation',
+      'target_answer',
+      'slots',
+      'approval_status',
+    ],
+  },
+  answer_change_log: { table: APPEND, updateColumns: [] },
+  practice_attempts: { table: APPEND, updateColumns: [] },
+  srs_review_logs: { table: APPEND, updateColumns: [] },
   srs_cards: {
     table: APPEND,
     updateColumns: [
@@ -40,6 +92,17 @@ const MATRIX: Record<string, { table: string[]; updateColumns?: string[] }> = {
     ],
   },
 }
+
+/** Columns that tie a row to its owner or parent: never updatable (security H1). */
+const NEVER_UPDATABLE = new Set([
+  'id',
+  'owner_id',
+  'collection_id',
+  'entry_id',
+  'user_id',
+  'card_id',
+  'created_at',
+])
 
 describe('the app role cannot change the schema (R1)', () => {
   it.each([
@@ -126,8 +189,8 @@ describe('privilege matrix (R4)', () => {
       expect(c.select, `${table}.${c.column} SELECT`).toBe(expected.table.includes('SELECT'))
       expect(c.insert, `${table}.${c.column} INSERT`).toBe(expected.table.includes('INSERT'))
       expect(c.references, `${table}.${c.column} REFERENCES`).toBe(false)
-      const canUpdate = expected.table.includes('UPDATE') || !!expected.updateColumns?.includes(c.column)
-      expect(c.update, `${table}.${c.column} UPDATE`).toBe(canUpdate)
+      expect(c.update, `${table}.${c.column} UPDATE`).toBe(expected.updateColumns.includes(c.column))
+      if (NEVER_UPDATABLE.has(c.column)) expect(c.update, `${table}.${c.column}`).toBe(false)
     }
   })
 
@@ -175,6 +238,9 @@ describe('boot privilege check (R7, D9)', () => {
         'schemaCreate',
         'ownsRelation',
         'ownsFunction',
+        'guardSchema',
+        'reviewLogsWritable',
+        'cardsDeletable',
       ]),
     )
   })

@@ -2,7 +2,7 @@
 import { randomUUID } from 'node:crypto'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { languageCodeSchema } from '../../shared/constants/languages'
-import { connectAs, count, expectPgError, pgError, truncateAll } from './helpers/db'
+import { connectAs, count, expectPgError, pgError, truncateAll, waitForLockWait } from './helpers/db'
 import {
   SCHEDULER_VERSION,
   T0,
@@ -18,6 +18,7 @@ import {
 } from './helpers/factories'
 
 const app = connectAs('app')
+const app2 = connectAs('app') // independent pool for concurrent transactions
 const migrator = connectAs('migrator')
 
 let userId: string
@@ -43,22 +44,31 @@ describe('cards are unique per user, entry and direction (C1, US-SRS-02)', () =>
   })
 })
 
-describe('client_review_id is unique (C2, US-SRS-03)', () => {
-  it('rejects a duplicate submission', async () => {
+describe('client_review_id is unique per card (C2, US-SRS-03, security L4)', () => {
+  it('rejects a duplicate submission for the same card', async () => {
     const a = await createCard(app, { userId, entryId, direction: 'recognition' })
-    const b = await createCard(app, { userId, entryId, direction: 'production' })
     const clientReviewId = randomUUID()
     await reviewCard(app, a.id, {}, { clientReviewId })
-    await expectPgError(reviewCard(app, b.id, {}, { clientReviewId }), {
+    await expectPgError(reviewCard(app, a.id, {}, { clientReviewId }), {
       code: '23505',
-      constraint: 'srs_review_logs_client_review_id_key',
+      constraint: 'srs_review_logs_card_client_review_id_key',
     })
     expect(await count(app, 'srs_review_logs')).toBe(1)
   })
 
-  it('rejects a concurrent duplicate on a second connection', async () => {
+  it("does not let one card's (or user's) client id block another card", async () => {
     const a = await createCard(app, { userId, entryId, direction: 'recognition' })
-    const b = await createCard(app, { userId, entryId, direction: 'production' })
+    const otherUser = await createUser(app)
+    const otherEntry = await createEntry(app, await createCollection(app, otherUser))
+    const b = await createCard(app, { userId: otherUser, entryId: otherEntry })
+    const clientReviewId = randomUUID()
+    await reviewCard(app, a.id, {}, { clientReviewId })
+    await reviewCard(app, b.id, {}, { clientReviewId })
+    expect(await count(app, 'srs_review_logs')).toBe(2)
+  })
+
+  it('rejects a concurrent duplicate for the same card on a second connection', async () => {
+    const a = await createCard(app, { userId, entryId, direction: 'recognition' })
     const clientReviewId = randomUUID()
 
     let release!: () => void
@@ -72,13 +82,17 @@ describe('client_review_id is unique (C2, US-SRS-03)', () => {
       await held // keep the transaction open while the second one inserts
     })
     await applied
-    const second = app.begin((tx) => applyReview(tx, b.id, {}, { clientReviewId }))
-    setTimeout(release, 200)
+    const second = app2.begin((tx) => applyReview(tx, a.id, {}, { clientReviewId }))
+    try {
+      await waitForLockWait(app)
+    } finally {
+      release()
+    }
 
     await first
     const error = await pgError(second)
     expect(error.code).toBe('23505')
-    expect(error.constraint_name).toBe('srs_review_logs_client_review_id_key')
+    expect(error.constraint_name).toBe('srs_review_logs_card_client_review_id_key')
     expect(await count(app, 'srs_review_logs')).toBe(1)
   })
 })
@@ -167,17 +181,49 @@ describe('accepted answers', () => {
 })
 
 describe('SRS values (C9, C10)', () => {
+  // Values a JSON snapshot can carry reach the CHECKs through the normal review path.
   it.each([
-    ['stability = NaN', { stability: Number.NaN }, 'srs_cards_stability_finite'],
-    ['stability = Infinity', { stability: Number.POSITIVE_INFINITY }, 'srs_cards_stability_finite'],
     ['stability = -1', { stability: -1 }, 'srs_cards_stability_finite'],
-    ['stability_fast = NaN', { stability_fast: Number.NaN }, 'srs_cards_stability_fast_finite'],
+    ['stability_fast = -1', { stability_fast: -1 }, 'srs_cards_stability_fast_finite'],
     ['difficulty = 11', { difficulty: 11 }, 'srs_cards_difficulty_range'],
-    ['scheduled_days = NaN', { scheduled_days: Number.NaN }, 'srs_cards_scheduled_days_finite'],
-    ['lapses > reps', { lapses: 5 }, 'srs_cards_counters'],
+    ['scheduled_days = -1', { scheduled_days: -1 }, 'srs_cards_scheduled_days_finite'],
   ])('a reviewed update with %s fails its CHECK', async (_label, patch, constraint) => {
     const card = await createCard(app, { userId, entryId })
     await expectPgError(reviewCard(app, card.id, patch), { code: '23514', constraint })
+  })
+
+  // NaN/Infinity can't be written to a JSON snapshot, and lapses > reps contradicts the one-review rule,
+  // so the guard already rejects them (SR002). The CHECKs are still verified as the owner, with the
+  // guard disabled inside a transaction that always rolls back.
+  it.each([
+    ['stability = NaN', { stability: Number.NaN }, 'srs_cards_stability_finite'],
+    ['stability = Infinity', { stability: Number.POSITIVE_INFINITY }, 'srs_cards_stability_finite'],
+    ['stability_fast = NaN', { stability_fast: Number.NaN }, 'srs_cards_stability_fast_finite'],
+    ['scheduled_days = NaN', { scheduled_days: Number.NaN }, 'srs_cards_scheduled_days_finite'],
+    ['lapses > reps', { lapses: 5 }, 'srs_cards_counters'],
+  ])('%s: rejected by the guard (SR002) and by its CHECK', async (_label, patch, constraint) => {
+    const card = await createCard(app, { userId, entryId })
+    await expectPgError(reviewCard(app, card.id, patch), { code: 'SR002' })
+    await expectPgError(
+      migrator.begin(async (tx) => {
+        await tx`alter table srs_cards disable trigger srs_cards_guard_update`
+        await tx`update srs_cards set ${tx(patch)} where id = ${card.id}`
+        throw new Error('the CHECK did not fire') // never commit the disabled trigger
+      }),
+      { code: '23514', constraint },
+    )
+  })
+
+  it.each([
+    ['trailing space', 'ts-fsrs@6.0.0/fsrs-7 '],
+    ['no package', 'fsrs-7'],
+    ['other lib', 'other@1.0.0/fsrs-7'],
+  ])('scheduler_version must match ts-fsrs@x.y.z/fsrs-n (%s)', async (_label, version) => {
+    await expectPgError(
+      app`insert into srs_cards (user_id, entry_id, direction, due_at, scheduler_version)
+          values (${userId}, ${entryId}, 'recognition', ${T0}, ${version})`,
+      { code: '23514', constraint: 'srs_cards_scheduler_version_format' },
+    )
   })
 
   it('a log with next_due_at before reviewed_at fails', async () => {
@@ -206,8 +252,8 @@ describe('history and practice rows', () => {
     const answerId = await createAnswer(app, { entryId })
     await expectPgError(
       app`insert into practice_attempts (user_id, entry_id, exercise_type, direction, source_mode,
-                                         submitted_answer, matched_answer_id, is_correct, session_id)
-          values (${userId}, ${entryId}, 'typing', 'production', 'typing', 'x', ${answerId}, false, ${randomUUID()})`,
+                                         submitted_answer, matched_answer_id, is_correct, session_id, expected_answer, entry_revision)
+          values (${userId}, ${entryId}, 'typing', 'production', 'typing', 'x', ${answerId}, false, ${randomUUID()}, 'le chat', 1)`,
       { code: '23514', constraint: 'practice_attempts_match_implies_correct' },
     )
   })
@@ -244,8 +290,8 @@ describe('history and practice rows', () => {
     })
     await expectPgError(
       app`insert into practice_attempts (user_id, entry_id, exercise_type, direction, source_mode,
-                                         submitted_answer, is_correct, diff, session_id)
-          values (${userId}, ${entryId}, 'typing', 'production', 'typing', 'x', false, ${app.json({ a: 1 })}, ${randomUUID()})`,
+                                         submitted_answer, is_correct, diff, session_id, expected_answer, entry_revision)
+          values (${userId}, ${entryId}, 'typing', 'production', 'typing', 'x', false, ${app.json({ a: 1 })}, ${randomUUID()}, 'le chat', 1)`,
       { code: '23514', constraint: 'practice_attempts_diff_array' },
     )
   })

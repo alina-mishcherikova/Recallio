@@ -61,22 +61,39 @@ function resolveUrls() {
   return { appUrl, migratorUrl }
 }
 
+/** Session-level advisory lock that serializes integration runs against the same _test database. */
+const RUN_LOCK_KEY = 4_402_002 // arbitrary, fixed: "LEX-002"
+
 export default async function setup(project: TestProject) {
   const { appUrl, migratorUrl } = resolveUrls()
-  const sql = postgres(migratorUrl, { max: 1, onnotice: () => {}, connect_timeout: 5 })
+  // One connection, held for the whole run: it owns the advisory lock until teardown.
+  const sql = postgres(migratorUrl, { max: 1, idle_timeout: 0, onnotice: () => {}, connect_timeout: 5 })
   try {
+    let locked: boolean
     try {
-      await sql`select 1`
+      const [row] = await sql<
+        { locked: boolean }[]
+      >`select pg_catalog.pg_try_advisory_lock(${RUN_LOCK_KEY}) as locked`
+      locked = row!.locked
     } catch {
       throw new Error('Cannot connect to the test database as the migrator. Is it running? (pnpm db:up)')
+    }
+    if (!locked) {
+      throw new Error(
+        'Another integration test run is using the test database (advisory lock held). ' +
+          'Wait for it to finish; runs share one database and wipe it on start.',
+      )
     }
     await sql`drop schema if exists drizzle cascade`
     await sql`drop schema if exists srs_guard cascade`
     await sql`drop schema if exists public cascade`
     await sql`create schema public authorization pg_database_owner`
     await migrate(drizzle(sql), { migrationsFolder: MIGRATIONS_FOLDER })
-  } finally {
+  } catch (error) {
     await sql.end({ timeout: 5 })
+    throw error
   }
   project.provide('db', { appUrl, migratorUrl })
+  // Teardown: closing the session releases the advisory lock.
+  return () => sql.end({ timeout: 5 })
 }

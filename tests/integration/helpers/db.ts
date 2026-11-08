@@ -75,3 +75,22 @@ export async function count(sql: Q, table: string): Promise<number> {
   const [row] = await sql<{ n: number }[]>`select count(*)::int as n from ${sql(table)}`
   return row!.n
 }
+
+/**
+ * Resolves once at least one backend of the app role is blocked on a lock in this database.
+ * Use it instead of a fixed timer before releasing a held transaction, so a concurrency test
+ * really exercises the lock wait instead of passing vacuously on a slow machine.
+ * Pass an app-role pool: pg_stat_activity hides wait events of other roles from non-superusers.
+ */
+export async function waitForLockWait(app: Q, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    const [row] = await app<{ n: number }[]>`
+      select count(*)::int as n from pg_catalog.pg_stat_activity
+       where datname = pg_catalog.current_database() and usename = 'recallio_app'
+         and wait_event_type = 'Lock'`
+    if (row!.n > 0) return
+    if (Date.now() > deadline) throw new Error('no transaction started waiting on a lock in time')
+    await new Promise((r) => setTimeout(r, 10))
+  }
+}

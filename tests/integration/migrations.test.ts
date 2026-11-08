@@ -26,11 +26,13 @@ describe('migrations on an empty database', () => {
       'answer_flags',
       'collections',
       'practice_attempts',
+      'sentence_examples',
       'srs_cards',
       'srs_review_logs',
       'users',
       'vocabulary_entries',
       'vocabulary_meanings',
+      'vocabulary_synonyms',
     ])
   })
 
@@ -54,50 +56,52 @@ describe('migrations on an empty database', () => {
     })
   })
 
-  it('creates the guard and integrity triggers, with the log check deferred to COMMIT', async () => {
-    const rows = await migrator<{ table: string; name: string; deferrable: boolean; deferred: boolean }[]>`
-      select c.relname as table, t.tgname as name, t.tgdeferrable as deferrable, t.tginitdeferred as deferred
+  it('creates the guard and integrity triggers, with only the log check deferred to COMMIT', async () => {
+    const rows = await migrator<{ table: string; name: string; deferred: boolean }[]>`
+      select c.relname as table, t.tgname as name, (t.tgdeferrable and t.tginitdeferred) as deferred
         from pg_catalog.pg_trigger t
         join pg_catalog.pg_class c on c.oid = t.tgrelid
        where not t.tgisinternal
-       order by 2`
-    expect(rows).toEqual([
-      {
-        table: 'answer_change_log',
-        name: 'answer_change_log_check_entry_owner',
-        deferrable: false,
-        deferred: false,
-      },
-      { table: 'answer_flags', name: 'answer_flags_check_entry_owner', deferrable: false, deferred: false },
-      { table: 'collections', name: 'collections_languages_immutable', deferrable: false, deferred: false },
-      {
-        table: 'practice_attempts',
-        name: 'practice_attempts_check_entry_owner',
-        deferrable: false,
-        deferred: false,
-      },
-      { table: 'srs_cards', name: 'srs_cards_check_entry_owner', deferrable: false, deferred: false },
-      { table: 'srs_cards', name: 'srs_cards_guard_insert', deferrable: false, deferred: false },
-      { table: 'srs_cards', name: 'srs_cards_guard_update', deferrable: false, deferred: false },
-      { table: 'srs_review_logs', name: 'srs_review_logs_open_grant', deferrable: false, deferred: false },
-      { table: 'srs_review_logs', name: 'srs_review_logs_require_applied', deferrable: true, deferred: true },
+       order by 1, 2`
+    expect(rows.map((r) => `${r.table}.${r.name}${r.deferred ? ' (deferred)' : ''}`)).toEqual([
+      'accepted_answers.accepted_answers_check_entry_language',
+      'answer_change_log.answer_change_log_check_entry_owner',
+      'answer_flags.answer_flags_check_entry_owner',
+      'collections.collections_languages_immutable',
+      'practice_attempts.practice_attempts_check_entry_owner',
+      'practice_attempts.practice_attempts_check_entry_revision',
+      'sentence_examples.sentence_examples_check_entry_language',
+      'srs_cards.srs_cards_check_entry_owner',
+      'srs_cards.srs_cards_guard_insert',
+      'srs_cards.srs_cards_guard_update',
+      'srs_review_logs.srs_review_logs_open_grant',
+      'srs_review_logs.srs_review_logs_require_applied (deferred)',
+      'vocabulary_entries.vocabulary_entries_lock_collection',
+      'vocabulary_synonyms.vocabulary_synonyms_check_entry_language',
     ])
   })
 
-  it('pins search_path on every trigger function and keeps them out of reach of the app role', async () => {
+  it('pins search_path on every function and keeps them out of reach of the app role', async () => {
+    // Our functions = not part of an extension (citext's functions also live in public).
     const fns = await migrator<{ name: string; definer: boolean; config: string[] | null }[]>`
-      select p.proname as name, p.prosecdef as definer, p.proconfig as config
+      select n.nspname || '.' || p.proname as name, p.prosecdef as definer, p.proconfig as config
         from pg_catalog.pg_proc p
         join pg_catalog.pg_namespace n on n.oid = p.pronamespace
-       where n.nspname = 'public' and p.prorettype = 'pg_catalog.trigger'::pg_catalog.regtype
+       where n.nspname in ('public', 'srs_guard')
+         and not exists (select 1 from pg_catalog.pg_depend d
+                          where d.classid = 'pg_catalog.pg_proc'::regclass and d.objid = p.oid and d.deptype = 'e')
        order by 1`
     expect(fns.map((f) => [f.name, f.definer])).toEqual([
-      ['check_entry_owner', false],
-      ['collections_languages_immutable', false],
-      ['srs_cards_guard_insert', false],
-      ['srs_cards_guard_update', true],
-      ['srs_review_logs_open_grant', true],
-      ['srs_review_logs_require_applied', true],
+      ['public.check_entry_language', false],
+      ['public.check_entry_owner', false],
+      ['public.check_entry_revision', false],
+      ['public.collections_languages_immutable', false],
+      ['public.srs_cards_guard_insert', false],
+      ['public.srs_cards_guard_update', true],
+      ['public.srs_review_logs_open_grant', true],
+      ['public.srs_review_logs_require_applied', true],
+      ['public.vocabulary_entries_lock_collection', false],
+      ['srs_guard.snapshot_matches', false],
     ])
     for (const fn of fns) expect(fn.config, fn.name).toEqual(['search_path=pg_catalog, pg_temp'])
 
@@ -105,9 +109,19 @@ describe('migrations on an empty database', () => {
       select p.proname as name
         from pg_catalog.pg_proc p
         join pg_catalog.pg_namespace n on n.oid = p.pronamespace
-       where n.nspname = 'public' and p.prorettype = 'pg_catalog.trigger'::pg_catalog.regtype
+       where n.nspname in ('public', 'srs_guard')
+         and not exists (select 1 from pg_catalog.pg_depend d
+                          where d.classid = 'pg_catalog.pg_proc'::regclass and d.objid = p.oid and d.deptype = 'e')
          and pg_catalog.has_function_privilege(p.oid, 'EXECUTE')`
     expect(executable).toEqual([])
+  })
+
+  it('the global setup holds the run lock, so a parallel run fails fast (tester M3)', async () => {
+    const [row] = await migrator<
+      { locked: boolean }[]
+    >`select pg_catalog.pg_try_advisory_lock(4402002) as locked`
+    if (row!.locked) await migrator`select pg_catalog.pg_advisory_unlock(4402002)`
+    expect(row!.locked).toBe(false)
   })
 
   it('is a no-op when run again', async () => {

@@ -31,8 +31,8 @@ describe("rows for user B on user A's entry are rejected (RC001)", () => {
   it('practice_attempts', async () => {
     const insert = (userId: string, entryId: string) =>
       app`insert into practice_attempts (user_id, entry_id, exercise_type, direction, source_mode,
-                                         submitted_answer, is_correct, session_id)
-          values (${userId}, ${entryId}, 'typing', 'production', 'typing', 'x', false, ${randomUUID()})`
+                                         submitted_answer, is_correct, session_id, expected_answer, entry_revision)
+          values (${userId}, ${entryId}, 'typing', 'production', 'typing', 'x', false, ${randomUUID()}, 'le chat', 1)`
     await expectPgError(insert(bob, aliceEntry), { code: 'RC001' })
     await insert(alice, aliceEntry)
   })
@@ -45,17 +45,17 @@ describe("rows for user B on user A's entry are rejected (RC001)", () => {
     await insert(alice, aliceEntry)
   })
 
-  it('answer_flags, on insert and on update', async () => {
+  it('answer_flags; owner and entry are not updatable afterwards (column grants)', async () => {
     const insert = (userId: string, entryId: string) =>
       app<{ id: string }[]>`insert into answer_flags (user_id, entry_id, direction, submitted_answer)
           values (${userId}, ${entryId}, 'production', 'x') returning id`
     await expectPgError(insert(bob, aliceEntry), { code: 'RC001' })
     const [flag] = await insert(alice, aliceEntry)
     await expectPgError(app`update answer_flags set user_id = ${bob} where id = ${flag!.id}`, {
-      code: 'RC001',
+      code: '42501',
     })
     await expectPgError(app`update answer_flags set entry_id = ${bobEntry} where id = ${flag!.id}`, {
-      code: 'RC001',
+      code: '42501',
     })
     await app`update answer_flags set status = 'approved' where id = ${flag!.id}`
   })
