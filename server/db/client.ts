@@ -1,12 +1,15 @@
-import { drizzle } from 'drizzle-orm/postgres-js'
+import { drizzle, type PostgresJsDatabase } from 'drizzle-orm/postgres-js'
 import postgres from 'postgres'
 import * as schema from './schema'
 
+/** The Drizzle database type. Services take it as a parameter, so tests can pass their own. */
+export type Db = PostgresJsDatabase<typeof schema>
+
 let client: ReturnType<typeof postgres> | undefined
-let database: ReturnType<typeof drizzle<typeof schema>> | undefined
+let database: Db | undefined
 
 /** Lazily created, process-wide Drizzle instance. All queries are parameterized by Drizzle. */
-export function useDb() {
+export function useDb(): Db {
   if (!database) {
     const { databaseUrl } = useRuntimeConfig()
     client = postgres(databaseUrl, {
