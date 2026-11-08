@@ -57,10 +57,15 @@ No email verification or password reset in the MVP.
 - Never commit to `main`. One branch per issue: `feat/lex-004-collections-api`, `fix/...`,
   `chore/...`, `hotfix/...`, `release/...` (Conventional Branch, kebab-case).
 - Conventional Commits: `type(scope): summary`, footer `Refs: LEX-xxx`.
-- Push and open a PR with `gh pr create` (body: summary, test plan, `Closes #n`). Alina reviews and merges.
+- Push and open a PR with `gh pr create` (body: summary, test plan, security review, `Closes #n`).
+- **Claude merges its own PRs** (`gh pr merge --squash --delete-branch`) once `pnpm check`, `pnpm test:e2e`
+  and the `security` agent review pass with no Critical/High findings. Alina does not review PRs.
+- Then sync `main` and start the next issue in dependency order (LEX-001 → LEX-018).
 
 ## Working with Alina
 
-- Ask before architecture, library, or data-model decisions. Make small decisions yourself and mention them.
+- Work autonomously through the backlog. Stop and ask Alina **only** for big decisions (data model,
+  new libraries, hosting, scope changes) or when blocked. Make small decisions yourself and list them
+  in the PR description.
 - Use the agents in `.claude/agents/`: architect → backend ∥ frontend → tester ∥ security → docs.
 - UI: Nuxt UI v4 components first. Build custom components only when Nuxt UI lacks one.
