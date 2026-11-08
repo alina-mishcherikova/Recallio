@@ -18,8 +18,9 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "typecheck": "nuxt typecheck",
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "test": "vitest run --project unit --project security --project nuxt",
+    "test:watch": "vitest --project unit --project security --project nuxt",
+    "test:integration": "vitest run --project integration",
     "test:e2e": "playwright test",
     "audit:prod": "pnpm audit --prod --audit-level high",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test"

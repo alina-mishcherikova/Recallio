@@ -1,7 +1,12 @@
 // Security regression tests for boot-time config validation (OWASP A02/A04/A10).
 // Each case is a bypass found in the LEX-001 security review.
 import { describe, expect, it } from 'vitest'
-import { serverConfigSchema, validateServerConfig } from '../../server/utils/env'
+import {
+  migrationConfigSchema,
+  serverConfigSchema,
+  validateMigrationConfig,
+  validateServerConfig,
+} from '../../server/utils/env'
 
 const remote = 'postgres://recallio:pw@db.internal:5432/recallio'
 const built = (databaseUrl: string) => () => validateServerConfig({ databaseUrl, built: true })
@@ -57,5 +62,36 @@ describe('TLS rule for built servers cannot be bypassed', () => {
 
   it('rejects unknown keys', () => {
     expect(serverConfigSchema.safeParse({ databaseUrl: remote, built: false, extra: 1 }).success).toBe(false)
+  })
+})
+
+describe('migration config validation (DATABASE_MIGRATOR_URL)', () => {
+  const secret = 'M1gr4t0r-Secret-xyz'
+  const migration = (migratorUrl: string) => () => validateMigrationConfig({ migratorUrl })
+
+  for (const url of [
+    `postgres://m:${secret}@h:notaport/db`,
+    `mysql://m:${secret}@h/db`,
+    secret,
+    `postgres://m:${secret}@db.internal/db`, // valid URL, fails the TLS rule
+  ]) {
+    it(`does not echo the value for ${url.replace(secret, '<secret>')}`, () => {
+      expect(migration(url)).toThrow()
+      try {
+        migration(url)()
+      } catch (e) {
+        expect(String(e)).not.toContain(secret)
+        expect(JSON.stringify(e)).not.toContain(secret)
+      }
+    })
+  }
+
+  it('applies the TLS rule to remote hosts (no dev-mode escape hatch)', () => {
+    expect(migration(`${remote}?sslmode=verify-full&sslmode=disable`)).toThrow(/verify-full/)
+    expect(migration(`${remote}?application_name=sslmode=verify-full`)).toThrow(/verify-full/)
+  })
+
+  it('rejects unknown keys', () => {
+    expect(migrationConfigSchema.safeParse({ migratorUrl: remote, built: true }).success).toBe(false)
   })
 })
