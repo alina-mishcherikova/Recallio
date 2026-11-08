@@ -16,40 +16,49 @@ Vocabulary learning web app: FSRS spaced repetition plus independent practice mo
 
 ```bash
 pnpm install
-cp .env.example .env        # then change POSTGRES_PASSWORD and NUXT_DATABASE_URL
+cp .env.example .env        # then change every password and keep the URLs in sync
 pnpm db:up                  # start PostgreSQL in Docker (bound to 127.0.0.1)
 pnpm db:migrate             # apply migrations
 pnpm dev                    # http://localhost:3000
 ```
+
+**Existing clones (one-time, from LEX-002):** the database now uses separate roles, created only on a
+fresh volume. Recreate `.env` from `.env.example`, then run `pnpm db:reset`. This **deletes all local
+data**. Do the same whenever you change a password or role in `.env`.
 
 `pnpm dev` and drizzle-kit read `.env` automatically. `pnpm test:e2e` runs the built server, which doesn't, so
 export the variables first: `set -a; . ./.env; set +a`.
 
 ## Commands
 
-| Command                             | What it does                                                                           |
-| ----------------------------------- | -------------------------------------------------------------------------------------- |
-| `pnpm dev`                          | Dev server with HMR                                                                    |
-| `pnpm build` / `pnpm preview`       | Production build / preview it                                                          |
-| `pnpm db:up` / `pnpm db:down`       | Start / stop local PostgreSQL                                                          |
-| `pnpm db:generate`                  | Generate a migration from `server/db/schema` changes                                   |
-| `pnpm db:migrate`                   | Apply migrations                                                                       |
-| `pnpm db:studio`                    | Drizzle Studio (browse the local DB)                                                   |
-| `pnpm lint` / `pnpm lint:fix`       | ESLint (Nuxt + security rules)                                                         |
-| `pnpm format` / `pnpm format:check` | Prettier                                                                               |
-| `pnpm typecheck`                    | `vue-tsc` via `nuxt typecheck`                                                         |
-| `pnpm test`                         | Vitest: `unit` (Node) and `nuxt` (Nuxt runtime) projects                               |
-| `pnpm test:e2e`                     | Playwright on desktop and mobile, with axe accessibility checks (builds the app first) |
-| `pnpm audit:prod`                   | Dependency audit; fails on high or critical findings                                   |
-| `pnpm check`                        | format check + lint + typecheck + unit tests                                           |
+| Command                             | What it does                                                                              |
+| ----------------------------------- | ----------------------------------------------------------------------------------------- |
+| `pnpm dev`                          | Dev server with HMR                                                                       |
+| `pnpm build` / `pnpm preview`       | Production build / preview it                                                             |
+| `pnpm db:up` / `pnpm db:down`       | Start / stop local PostgreSQL                                                             |
+| `pnpm db:generate`                  | Generate a migration from `server/db/schema` changes                                      |
+| `pnpm db:migrate`                   | Apply migrations                                                                          |
+| `pnpm db:reset`                     | Delete the local DB volume, start PostgreSQL, and re-apply migrations (**deletes data**)  |
+| `pnpm db:studio`                    | Drizzle Studio (browse the local DB)                                                      |
+| `pnpm lint` / `pnpm lint:fix`       | ESLint (Nuxt + security rules)                                                            |
+| `pnpm format` / `pnpm format:check` | Prettier                                                                                  |
+| `pnpm typecheck`                    | `vue-tsc` via `nuxt typecheck`                                                            |
+| `pnpm test`                         | Vitest: `unit` (Node) and `nuxt` (Nuxt runtime) projects                                  |
+| `pnpm test:integration`             | Vitest integration project against real PostgreSQL (needs Docker via `pnpm db:up`)        |
+| `pnpm test:e2e`                     | Playwright on desktop and mobile, with axe accessibility checks (builds the app first)    |
+| `pnpm audit:prod`                   | Dependency audit; fails on high or critical findings                                      |
+| `pnpm check`                        | format check + lint + typecheck + unit tests (no integration tests; run those separately) |
 
 ## Environment variables
 
-| Name                                                                    | Purpose                                                                                                                              |
-| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `NUXT_DATABASE_URL`                                                     | PostgreSQL connection string. A built server connecting to a non-local DB **must** use exactly one `sslmode=verify-full`.            |
-| `NUXT_TRUSTED_IP_HEADER`                                                | Optional. Client-IP header set by your reverse proxy (e.g. `fly-client-ip`). Only set it if the proxy always overwrites that header. |
-| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` / `POSTGRES_PORT` | Local Docker database only                                                                                                           |
+| Name                                                                    | Purpose                                                                                                                                                                    |
+| ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NUXT_DATABASE_URL`                                                     | Runtime connection, as the DML-only app role. A built server refuses to start with a role that can run DDL. A non-local DB **must** use exactly one `sslmode=verify-full`. |
+| `DATABASE_MIGRATOR_URL`                                                 | Migrations only (drizzle-kit). Migrator role; never read by the server.                                                                                                    |
+| `TEST_DATABASE_URL` / `TEST_DATABASE_MIGRATOR_URL`                      | Integration tests. The database name must end in `_test`: it is wiped on every run.                                                                                        |
+| `RECALLIO_MIGRATOR_PASSWORD` / `RECALLIO_APP_PASSWORD`                  | Passwords for the two DB roles, set when the local Docker database is first created                                                                                        |
+| `NUXT_TRUSTED_IP_HEADER`                                                | Optional. Client-IP header set by your reverse proxy (e.g. `fly-client-ip`). Only set it if the proxy always overwrites that header.                                       |
+| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` / `POSTGRES_PORT` | Local Docker database only                                                                                                                                                 |
 
 The server validates its configuration at startup and refuses to start if it's invalid. Every built
 server (`pnpm build`) applies the production rules, whatever `NODE_ENV` says. Only `pnpm dev` is relaxed.

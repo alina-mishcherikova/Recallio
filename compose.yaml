@@ -5,15 +5,22 @@ services:
     image: postgres:17-alpine@sha256:3540c0362c809df084ffac0ae69fe794515f9de92692f02178bcdce0ef0302ac
     restart: unless-stopped
     environment:
+      # Bootstrap superuser: used only by the init script, never by the app or migrations.
       POSTGRES_USER: ${POSTGRES_USER:?set in .env}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
       POSTGRES_DB: ${POSTGRES_DB:?set in .env}
+      # Read by docker/postgres/initdb/10-roles.sh on first start (empty volume only).
+      RECALLIO_MIGRATOR_PASSWORD: ${RECALLIO_MIGRATOR_PASSWORD:?set in .env}
+      RECALLIO_APP_PASSWORD: ${RECALLIO_APP_PASSWORD:?set in .env}
     ports:
       - '127.0.0.1:${POSTGRES_PORT:-5432}:5432' # bind to localhost only
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres/initdb:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}']
+      # TCP, not the socket: the init phase runs a socket-only server, so this only passes once
+      # initialization (roles, recallio_test) has finished.
+      test: ['CMD-SHELL', 'pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}']
       interval: 2s
       timeout: 3s
       retries: 30

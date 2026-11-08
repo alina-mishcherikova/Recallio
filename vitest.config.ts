@@ -20,6 +20,20 @@ export default defineConfig({
           environment: 'node',
         },
       },
+      {
+        // Real PostgreSQL (needs `pnpm db:up`). Not part of `pnpm test`: run `pnpm test:integration`.
+        // The global setup rebuilds the _test database from the migrations on every run. Files share
+        // one database and commit for real (the SRS guard fires at COMMIT), so they run serially.
+        test: {
+          name: 'integration',
+          include: ['tests/integration/**/*.test.ts'],
+          environment: 'node',
+          globalSetup: ['tests/integration/global-setup.ts'],
+          fileParallelism: false,
+          testTimeout: 20_000,
+          hookTimeout: 60_000,
+        },
+      },
       // Components and composables that need the Nuxt runtime.
       await defineVitestProject({
         test: {

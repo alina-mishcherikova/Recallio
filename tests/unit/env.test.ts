@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { validateServerConfig } from '../../server/utils/env'
+import { validateMigrationConfig, validateServerConfig } from '../../server/utils/env'
 
 const local = 'postgres://u:p@localhost:5432/db'
 const remote = 'postgres://u:p@db.example.com:5432/db'
@@ -28,5 +28,23 @@ describe('validateServerConfig', () => {
 
   it('allows remote plaintext only on the dev server', () => {
     expect(() => validateServerConfig({ databaseUrl: remote, built: false })).not.toThrow()
+  })
+})
+
+describe('validateMigrationConfig', () => {
+  it('accepts a local database without TLS', () => {
+    expect(validateMigrationConfig({ migratorUrl: local }).migratorUrl).toBe(local)
+  })
+
+  it('rejects a missing, empty, or non-postgres URL', () => {
+    for (const migratorUrl of [undefined, '', 'mysql://u:p@h/db', 'not a url']) {
+      expect(() => validateMigrationConfig({ migratorUrl })).toThrow(/migratorUrl/)
+    }
+  })
+
+  it('always requires verified TLS for remote databases', () => {
+    expect(() => validateMigrationConfig({ migratorUrl: remote })).toThrow(/verify-full/)
+    expect(() => validateMigrationConfig({ migratorUrl: `${remote}?sslmode=require` })).toThrow(/verify-full/)
+    expect(() => validateMigrationConfig({ migratorUrl: `${remote}?sslmode=verify-full` })).not.toThrow()
   })
 })

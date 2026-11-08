@@ -33,7 +33,11 @@ nuxt-auth-utils · ts-fsrs v6 (exact version pinned) · Vitest + Playwright · N
 4. **No misleading metrics.** Practice accuracy ≠ FSRS retention. Keep them separate in storage and UI.
 5. **Ownership everywhere.** Every query is scoped to the session user. Other users' resources → 404.
 6. **Accessibility:** WCAG 2.2 AA. Feedback never relies on color alone. Keyboard and touch both work.
-7. **Security by default.** OWASP Top 10 (2025) + ASVS L2. Controls are in `docs/architecture.md` §8.
+7. **Migrations are immutable once merged.** Never edit a merged migration; schema changes need a new
+   migration. Every new table needs an explicit grant for the app role (`docs/decisions/0001-database-schema.md` §4).
+8. **SRS scheduling columns change only through the review guard.** The database rejects any update
+   that isn't backed by a matching `srs_review_logs` row; there is no reset path (ADR 0001 §3).
+9. **Security by default.** OWASP Top 10 (2025) + ASVS L2. Controls are in `docs/architecture.md` §8.
    - Deny by default: every `/api/**` route requires a session unless it's on the public allow-list.
    - Zod `strict()` validation for every body, query, and param. Never trust the client.
    - Parameterized queries only (no `sql.raw`). No `v-html`, no `eval`.

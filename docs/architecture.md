@@ -1,6 +1,6 @@
 # Recallio — Architecture
 
-**Status:** Approved decisions applied — awaiting final approval · **Date:** 2026-11-08 · **Spec:** [`docs/spec.md`](./spec.md) (v1.1)
+**Status:** Approved (living document; updated per issue) · **Date:** 2026-11-08 · **Spec:** [`docs/spec.md`](./spec.md) (v1.1)
 
 This document describes how Recallio is built: the stack, the code structure, the data model, the
 rules that protect FSRS scheduling, and the development workflow (agents, git, quality gates).
@@ -77,44 +77,64 @@ practice-type modules, so they get **no** write access to SRS.
 
 ## 4. Data model
 
-Spec §14 is the baseline. The additions below are needed to meet the acceptance criteria.
+Spec §14 is the baseline. This is a summary of `server/db/schema/*.ts`; constraints, indexes,
+triggers, and the reasons behind them are in [ADR 0001](./decisions/0001-database-schema.md). All ids
+are `uuid`; timestamps are `timestamptz`.
 
 ```
-users(id uuid pk, email citext unique, password_hash, native_language,  -- languages: ISO 639-1 daily_new_limit int default 20,
-      daily_review_limit int default 200, timezone text, created_at, deleted_at)
+users(id, email citext unique, password_hash, native_language, daily_new_limit default 20,
+      daily_review_limit default 200, timezone default 'UTC', created_at)
 collections(id, owner_id → users, title, native_language, target_language, description, topic,
             normalization jsonb, archived_at, created_at)          CHECK native_language <> target_language
-vocabulary_entries(id, collection_id, target_expression, native_expression, part_of_speech, topic,
-                   revision int, created_at, updated_at)
+vocabulary_entries(id, collection_id → collections, target_expression, normalized_target_expression,
+                   native_expression, part_of_speech, topic, revision int, created_at, updated_at)
 vocabulary_meanings(id, entry_id, definition, grammatical_metadata jsonb)
 accepted_answers(id, entry_id, meaning_id null, language, answer_text, normalized_text, is_primary)
-answer_change_log(id, answer_id, entry_id, user_id, action, before jsonb, after jsonb, created_at)   -- US-VOC-04
-answer_flags(id, user_id, entry_id, direction, submitted_answer, status, created_at)                  -- US-TYP-03
+vocabulary_synonyms(id, entry_id, meaning_id null, language, text, normalized_text,
+                    approval_status, created_at)
+sentence_examples(id, entry_id, meaning_id null, language, sentence, translation, target_answer,
+                  slots jsonb, approval_status, created_at)
+answer_change_log(id, answer_id, entry_id, user_id, action, before jsonb, after jsonb, created_at)  -- append-only
+answer_flags(id, user_id, entry_id, direction, submitted_answer, status, created_at)
 
-srs_cards(id, user_id, entry_id, direction, state, due_at, stability, difficulty, elapsed_days,
-          scheduled_days, learning_steps, reps, lapses, last_review_at, scheduler_version, updated_at)
-          UNIQUE(user_id, entry_id, direction)
-srs_review_logs(id, card_id, client_review_id uuid UNIQUE, rating, reviewed_at, previous_state jsonb,
-                next_state jsonb, previous_due_at, next_due_at, scheduler_version)
+srs_cards(id, user_id, entry_id, direction, state, schedule_status, due_at, stability, stability_fast null,
+          difficulty, scheduled_days, learning_steps, reps, lapses, last_review_at, scheduler_version,
+          updated_at)    UNIQUE(user_id, entry_id, direction)
+srs_review_logs(id, card_id, user_id, client_review_id uuid, rating, reviewed_at, entry_revision,
+                previous_state jsonb, next_state jsonb, previous_due_at, next_due_at,
+                scheduler_version)    UNIQUE(card_id, client_review_id)    -- append-only
 
 practice_attempts(id, user_id, entry_id, exercise_type, direction, source_mode, submitted_answer,
-                  matched_answer_id, is_correct, diff jsonb, session_id, created_at)
+                  expected_answer, entry_revision, matched_answer_id null, is_correct, diff jsonb,
+                  session_id, created_at)                                                        -- append-only
 ```
 
+- **ts-fsrs 6 card fields** are stored one-to-one (`FSRS_CARD_FIELD_MAP` in `schema/srs.ts`, checked
+  by a unit test): `state`, `schedule_status`, `due_at`, `last_review_at`, `stability`,
+  `stability_fast` (FSRS-7 only), `difficulty`, `scheduled_days` (fractional), `learning_steps`,
+  `reps`, `lapses`. `elapsed_days` no longer exists in ts-fsrs 6 and is not stored.
+- **Review idempotency** is per card: `UNIQUE(card_id, client_review_id)`, so one user's client id
+  can never block or reveal another user's review.
 - **Languages** are stored as ISO 639-1 codes (`fr`, `en`, ...), validated against an allow-list in
-  `shared/constants/languages.ts`. The launch allow-list is **`fr` and `en`**. Adding a language
-  means adding it to that list, with no schema change.
+  `shared/constants/languages.ts` (the DB only checks the `^[a-z]{2}$` shape). The launch allow-list
+  is **`fr` and `en`**. Adding a language means adding it to that list, with no schema change.
+  A collection's languages are immutable once it has entries (trigger).
 - **Direction** is an enum: `recognition` (target → native) and `production` (native → target).
-- **Normalization config** is stored per collection, with defaults for case, accents, punctuation,
-  and whitespace (US-VOC-04).
-- **Content revisions:** review and attempt rows store what was shown and answered, so editing an
-  entry never rewrites history. A "materially different meaning" edit goes through an explicit
-  `resetCards` action (US-VOC-02).
-- **Deleting a collection** is a soft archive by default. Hard delete requires confirmation and
-  cascades.
-- Release 2/3 tables (`sentence_examples`, `sentence_templates`, `guided_sessions`,
-  `guided_session_entries`, `assessment_results`, `test_sessions`) will be added in their own
-  migrations. None of them has a foreign key that writes to `srs_*`.
+- **Normalization config** is stored per collection (`'{}'` = defaults for case, accents,
+  punctuation, and whitespace; US-VOC-04).
+- **Content revisions:** `vocabulary_entries.revision` counts edits. Review logs and attempts store
+  the revision they were graded against, and attempts also keep the expected answer, so editing an
+  entry never rewrites history. A materially different meaning is a **new entry** with new cards
+  (US-VOC-02); there is no reset action (§5).
+- **Integrity in the database:** CHECK constraints for lengths, ranges and finite numbers; triggers
+  keep `user_id` on child rows equal to the entry owner, answers/synonyms/examples inside the
+  collection's two languages, and `entry_revision` from running ahead of the entry.
+- **Deletion:** account deletion is a hard delete through `ON DELETE CASCADE` (no `deleted_at`).
+  Deleting a collection is a soft archive (`archived_at`) by default; hard delete requires
+  confirmation and cascades.
+- Release 2/3 tables (`sentence_templates`, `guided_sessions`, `guided_session_entries`,
+  `assessment_results`, `test_sessions`) will be added in their own migrations. None of them has a
+  foreign key that writes to `srs_*`.
 
 ## 5. SRS isolation — the non-negotiable rule (DEC-002, US-SRS-03)
 
@@ -125,9 +145,27 @@ Enforced at four layers, so a mistake in one layer is caught by another:
    other file imports `server/db/schema/srs` write paths.
 2. **Single endpoint.** `POST /api/review/submit` is the only route that calls `submitReview()`.
    Practice endpoints (`/api/practice/**`) have no code path to it.
-3. **Database guard.** A Postgres trigger rejects `UPDATE` on `srs_cards` scheduling columns unless
-   a `srs_review_logs` row is inserted in the same transaction (via the transaction-local setting
-   `app.review_id`). Card creation (insert) is allowed for the vocabulary service.
+3. **Database guard** (migration `0002_srs_guard.sql`, ADR 0001 §3). Changing any scheduling column
+   of `srs_cards` needs a grant, and a grant exists only because a `srs_review_logs` row was inserted
+   in the same transaction. Grants live in a private table, `srs_guard.review_grants`, which only
+   the `SECURITY DEFINER` trigger functions can touch; the app role has no privilege on that schema,
+   so it can't forge, replay, or clear a grant. Checks:
+   - **Insert on logs** opens one grant (one per transaction) and verifies the log's `user_id` is the
+     card's user and `entry_revision` is not ahead of the entry.
+   - **Update on cards** must be exactly the transition the log describes: `previous_state` and
+     `next_state` equal the card before and after (12 scheduling columns), `reps` + 1, a lapse only on
+     `again`, `last_review_at = reviewed_at`, due date and scheduler version equal the log's. The
+     grant is consumed, so one log authorizes one update. Identity columns are immutable.
+   - **Commit-time check** (deferred constraint trigger): a log whose card update never happened
+     aborts the transaction.
+   - **Card insert** must be pristine (`new`, zero counters, no last review, not due in the future),
+     so card creation can't write history.
+
+   There is **no reset path**: no reset endpoint, function, or `manual` rating. A materially different
+   meaning is a new entry with new cards; the old entry's history stays intact. The app role also has
+   column-level `UPDATE` only on the scheduling columns, no `DELETE` on cards, and no `UPDATE` or
+   `DELETE` on logs (§8).
+
 4. **Regression tests.** Every practice mode has an integration test that snapshots `srs_cards`
    and `srs_review_logs`, runs practice attempts, and asserts both are unchanged.
 
@@ -146,7 +184,7 @@ client → POST /api/review/submit { clientReviewId (uuid v7), cardId, rating, r
 
 **FSRS configuration:** `ts-fsrs` is pinned to an exact version. `request_retention = 0.90`,
 `enable_fuzz = false` (spec §15 requires deterministic scheduling), and `scheduler_version`
-(for example `ts-fsrs@6.0.0/fsrs-7`) is stored on every card and log. Upgrading the scheduler means
+(for example `ts-fsrs@6.0.0/fsrs-7`, format enforced by a CHECK) is stored on every card and log. Upgrading the scheduler means
 bumping the version string. Existing cards keep their history and switch to the new scheduler on
 their next review.
 
@@ -216,8 +254,19 @@ reads, and labels practice accuracy and FSRS retention as different metrics.
 - **Lint guardrails:** inline `eslint-disable` comments are ignored (`noInlineConfig`). Rules ban
   `sql.raw` (under any alias), `db.execute(string)`, `v-html`/`:innerHTML`, DOM HTML sinks, `eval`,
   and non-literal dynamic `import()`.
-- **Least privilege:** the app's DB role can't run DDL. Migrations run with a separate role in CI/deploy
-  (set up in LEX-002; locally the Docker superuser is used for now).
+- **Least privilege** (ADR 0001 §4): two DB roles, provisioned outside migrations
+  (`docker/postgres/initdb/10-roles.sh` locally; the host in production).
+  `recallio_migrator` owns the database and runs migrations (`DATABASE_MIGRATOR_URL`, read only by
+  drizzle-kit and test setup, never by the Nuxt server). `recallio_app` (`NUXT_DATABASE_URL`) is
+  `NOSUPERUSER`, can't create objects, and only has the DML grants from migration `0004`:
+  column-level `UPDATE` (keys, owner/parent columns and `created_at` are never writable), append-only
+  history tables (`SELECT, INSERT` only), and no `DELETE` on `srs_cards`. New tables get no default
+  privileges; each needs an explicit grant in its own migration.
+  **Boot privilege check** (`server/plugins/02.db-privileges.ts`, `server/utils/db-privileges.ts`): a
+  built server verifies the connected role (superuser, create role/db, bypass RLS, owner of any
+  object, DDL rights, `srs_guard` access, write access to logs, delete on cards, ...). An unsafe
+  role makes the server exit; while the database is unreachable, everything except `/api/health`
+  answers 503 until the check passes (fail closed). `pnpm dev` only warns.
 - **Error responses:** a central error handler returning only `{ statusCode, message }` arrives with
   LEX-003. Nitro's default 404 body currently reflects the request URL/Host. It has no stack or paths.
 - **HSTS preload:** only submit the domain to the preload list once every subdomain serves HTTPS.
