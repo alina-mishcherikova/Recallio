@@ -1,6 +1,6 @@
 # Recallio — Architecture
 
-**Status:** Approved decisions applied — awaiting final approval · **Date:** 2026-11-08 · **Spec:** [`docs/spec.md`](./spec.md) (v1.1)
+**Status:** Approved (living document; updated per issue) · **Date:** 2026-11-08 · **Spec:** [`docs/spec.md`](./spec.md) (v1.1)
 
 This document describes how Recallio is built: the stack, the code structure, the data model, the
 rules that protect FSRS scheduling, and the development workflow (agents, git, quality gates).
