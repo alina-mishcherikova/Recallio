@@ -1,7 +1,8 @@
 # 0001 — Database schema, SRS guard trigger, and least-privilege roles (LEX-002)
 
 - **Status:** Accepted (2026-11-08). Final decisions in §7: D1 approved · D2 rejected · D3 = (b) · D4 = B ·
-  D5–D10 approved. This record describes what was implemented in LEX-002.
+  D5–D10 approved. Amended before merge with the security and tester review fixes and the synonym and
+  sentence-example tables (§7a). This record describes what was implemented in LEX-002.
 - **Date:** 2026-11-08
 - **Issue:** LEX-002 (#3), branch `feat/lex-002-database-schema`
 - **Inputs:** `docs/spec.md` §4–5, §13–15 · `docs/architecture.md` §4, §5, §8 · `CLAUDE.md` rules 1, 2, 5, 7
@@ -105,376 +106,37 @@ Conventions: PKs are `uuid` with `defaultRandom()` (`gen_random_uuid()`; PG17 ha
 Timestamps are `timestamptz` (`{ withTimezone: true, mode: 'date' }`). Every FK column has an index (cascade performance).
 Text lengths are enforced in the DB too (defence in depth; Zod enforces the same limits).
 
-```ts
-// server/db/schema/_shared.ts
-import { customType, timestamp } from 'drizzle-orm/pg-core'
-import { sql, type AnyColumn } from 'drizzle-orm'
-export const citext = customType<{ data: string }>({ dataType: () => 'citext' })
-export const tsz = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' })
-/** ISO 639-1 shape. The allow-list itself lives in shared/constants/languages.ts (D5). */
-export const isLangCode = (c: AnyColumn) => sql`${c} ~ '^[a-z]{2}$'`
-```
+The Drizzle files are the source of truth (`users.ts`, `collections.ts`, `vocabulary.ts`, `srs.ts`,
+`practice.ts`, `enums.ts`); `0001_tables.sql` is generated from them. CHECK bounds are literals inside
+each `sql` template: DDL can't take bound parameters, and `sql.raw` is lint-banned.
 
-> CHECK bounds are written as literals inside each `sql` template (for example
-> ``sql`char_length(${t.title}) between 1 and 200` ``). DDL can't take bound parameters, and `sql.raw`
-> is lint-banned, so there is no generic `len()` helper.
+| Table                 | Key columns and rules                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `users`               | `email` citext unique (3–254) · `password_hash` · `native_language` (format) · `daily_new_limit` 0–1000 (20) · `daily_review_limit` 0–10000 (200) · `timezone` (UTC). No `deleted_at` (D6).                                                                                                                                                                                                                                                                                                                          |
+| `collections`         | `owner_id` → users · `title` 1–200 · `native_language` ≠ `target_language` (format) · `description` ≤ 2000 · `topic` · `normalization` jsonb object ≤ 4 KB · `archived_at`. Index `(owner_id, created_at desc)`.                                                                                                                                                                                                                                                                                                     |
+| `vocabulary_entries`  | `collection_id` → collections · `target_expression`, **`normalized_target_expression`** (1–500, review L4), `native_expression` · `part_of_speech` · `topic` · `revision` ≥ 1. Indexes `(collection_id, created_at, id)` (keyset) and `(collection_id, normalized_target_expression)` (duplicate lookup on create/CSV import).                                                                                                                                                                                       |
+| `vocabulary_meanings` | `entry_id` → entries · `definition` · `grammatical_metadata` jsonb object. `UNIQUE (id, entry_id)` is the target of the composite FKs below.                                                                                                                                                                                                                                                                                                                                                                         |
+| `accepted_answers`    | `entry_id` · `meaning_id` (composite FK `(meaning_id, entry_id)`: a meaning of the same entry) · `language` (format; in the collection's pair, RC003) · `answer_text` · `normalized_text` 1–500 (never empty, rule 3) · `is_primary` (one per entry+language). **`UNIQUE (entry_id, language, normalized_text)`** (review L3; also serves the answer-engine lookup).                                                                                                                                                 |
+| `vocabulary_synonyms` | **New (review).** `entry_id` · `meaning_id` (composite FK, US-MCQ-02 "attached to specific meanings") · `language` (format, RC003) · `text` · `normalized_text` · `approval_status` (pending) · `created_at`. `UNIQUE (entry_id, language, normalized_text)`. Only approved synonyms are used later.                                                                                                                                                                                                                 |
+| `sentence_examples`   | **New (review, spec §14.1).** `entry_id` · `meaning_id` (composite FK) · `language` (format, RC003) · `sentence` 1–1000 · `translation` ≤ 1000 · `target_answer` 1–500 · **`slots` jsonb** · `approval_status` · `created_at`. See "slots" below.                                                                                                                                                                                                                                                                    |
+| `answer_change_log`   | Append-only. `answer_id` (soft reference) · `entry_id` · `user_id` · `action` with matching `before`/`after` objects.                                                                                                                                                                                                                                                                                                                                                                                                |
+| `answer_flags`        | `user_id` · `entry_id` · `direction` · `submitted_answer` 1–500 · `status`. **Unique open flag** `(user_id, entry_id, direction, submitted_answer) WHERE status = 'pending'` (review L3).                                                                                                                                                                                                                                                                                                                            |
+| `srs_cards`           | Full ts-fsrs 6 / FSRS-7 card (D1). `UNIQUE (user_id, entry_id, direction)`. Finite/range CHECKs (`< 'Infinity'` also rejects NaN), `lapses ≤ reps`, **`scheduler_version` ~ `^ts-fsrs@x.y.z/fsrs-n$`**, **millisecond precision** on `due_at`/`last_review_at`. Index `(user_id, due_at)`.                                                                                                                                                                                                                           |
+| `srs_review_logs`     | Append-only. `card_id` · **`user_id`** → users (= the card's user, RC001; review L1) · `client_review_id` · `rating` (again..easy) · `reviewed_at` (ms) · **`entry_revision`** ≥ 1 (≤ the entry's revision, RC004; review M2) · `previous_state`/`next_state` (snapshot format, §3.1) · `previous_due_at`, `next_due_at` · `scheduler_version` (format). **`UNIQUE (card_id, client_review_id)`** (review L4). Indexes `(card_id, reviewed_at)` and **`(user_id, reviewed_at)`** ("reviews today", new-card counts). |
+| `practice_attempts`   | Append-only, no relation to `srs_*`. `user_id` · `entry_id` · `exercise_type` · `direction` · `source_mode` · `submitted_answer` · **`expected_answer`** (snapshot) · **`entry_revision`** (≤ the entry's, RC004) · `matched_answer_id` (SET NULL; a match implies correct) · `is_correct` · `diff` array · `session_id`.                                                                                                                                                                                            |
 
-```ts
-// server/db/schema/enums.ts
-export const directionEnum = pgEnum('direction', DIRECTIONS)
-export const srsStateEnum = pgEnum('srs_state', SRS_STATES)
-export const srsScheduleStatusEnum = pgEnum('srs_schedule_status', SRS_SCHEDULE_STATUSES)
-export const srsRatingEnum = pgEnum('srs_rating', SRS_RATINGS)
-export const exerciseTypeEnum = pgEnum('exercise_type', EXERCISE_TYPES)
-export const practiceSourceModeEnum = pgEnum('practice_source_mode', PRACTICE_SOURCE_MODES)
-export const approvalStatusEnum = pgEnum('approval_status', APPROVAL_STATUSES)
-export const answerChangeActionEnum = pgEnum('answer_change_action', ANSWER_CHANGE_ACTIONS)
-```
-
-```ts
-// server/db/schema/users.ts
-export const users = pgTable(
-  'users',
-  {
-    id: uuid('id').primaryKey().defaultRandom(),
-    email: citext('email').notNull(),
-    passwordHash: text('password_hash').notNull(),
-    nativeLanguage: text('native_language').notNull(),
-    dailyNewLimit: integer('daily_new_limit').notNull().default(20),
-    dailyReviewLimit: integer('daily_review_limit').notNull().default(200),
-    timezone: text('timezone').notNull().default('UTC'), // IANA; validated by Zod (Intl)
-    createdAt: tsz('created_at').notNull().defaultNow(),
-    // deleted_at: dropped, see D6
-  },
-  (t) => [
-    uniqueIndex('users_email_key').on(t.email),
-    check('users_email_len', sql`char_length(${t.email}) between 3 and 254`),
-    check('users_password_hash_len', sql`char_length(${t.passwordHash}) between 1 and 512`),
-    check('users_native_language_code', sql`${t.nativeLanguage} ~ '^[a-z]{2}$'`),
-    check('users_daily_new_limit_range', sql`${t.dailyNewLimit} between 0 and 1000`),
-    check('users_daily_review_limit_range', sql`${t.dailyReviewLimit} between 0 and 10000`),
-    check('users_timezone_len', sql`char_length(${t.timezone}) between 1 and 64`),
-  ],
-)
-```
-
-```ts
-// server/db/schema/collections.ts
-export const collections = pgTable(
-  'collections',
-  {
-    id: uuid('id').primaryKey().defaultRandom(),
-    ownerId: uuid('owner_id')
-      .notNull()
-      .references(() => users.id, { onDelete: 'cascade' }),
-    title: text('title').notNull(),
-    nativeLanguage: text('native_language').notNull(),
-    targetLanguage: text('target_language').notNull(),
-    description: text('description'),
-    topic: text('topic'),
-    // '{}' = all defaults; the rule shape and defaults are owned by shared/answers (LEX-010)
-    normalization: jsonb('normalization').$type<Record<string, unknown>>().notNull().default({}),
-    archivedAt: tsz('archived_at'),
-    createdAt: tsz('created_at').notNull().defaultNow(),
-  },
-  (t) => [
-    index('collections_owner_created_idx').on(t.ownerId, t.createdAt.desc()),
-    check('collections_languages_differ', sql`${t.nativeLanguage} <> ${t.targetLanguage}`),
-    check('collections_native_language_code', sql`${t.nativeLanguage} ~ '^[a-z]{2}$'`),
-    check('collections_target_language_code', sql`${t.targetLanguage} ~ '^[a-z]{2}$'`),
-    check('collections_title_len', sql`char_length(${t.title}) between 1 and 200`),
-    check(
-      'collections_description_len',
-      sql`${t.description} is null or char_length(${t.description}) <= 2000`,
-    ),
-    check('collections_topic_len', sql`${t.topic} is null or char_length(${t.topic}) between 1 and 100`),
-    check(
-      'collections_normalization_object',
-      sql`jsonb_typeof(${t.normalization}) = 'object' and octet_length(${t.normalization}::text) <= 4096`,
-    ),
-  ],
-)
-```
-
-```ts
-// server/db/schema/vocabulary.ts
-export const vocabularyEntries = pgTable(
-  'vocabulary_entries',
-  {
-    id: uuid('id').primaryKey().defaultRandom(),
-    collectionId: uuid('collection_id')
-      .notNull()
-      .references(() => collections.id, { onDelete: 'cascade' }),
-    targetExpression: text('target_expression').notNull(),
-    nativeExpression: text('native_expression').notNull(),
-    partOfSpeech: text('part_of_speech'),
-    topic: text('topic'),
-    revision: integer('revision').notNull().default(1),
-    createdAt: tsz('created_at').notNull().defaultNow(),
-    updatedAt: tsz('updated_at').notNull().defaultNow(),
-  },
-  (t) => [
-    // keyset pagination: WHERE collection_id = $1 AND (created_at, id) > ($2, $3) ORDER BY created_at, id
-    index('vocabulary_entries_collection_page_idx').on(t.collectionId, t.createdAt, t.id),
-    check('vocabulary_entries_target_len', sql`char_length(${t.targetExpression}) between 1 and 500`),
-    check('vocabulary_entries_native_len', sql`char_length(${t.nativeExpression}) between 1 and 500`),
-    check(
-      'vocabulary_entries_pos_len',
-      sql`${t.partOfSpeech} is null or char_length(${t.partOfSpeech}) between 1 and 50`,
-    ),
-    check(
-      'vocabulary_entries_topic_len',
-      sql`${t.topic} is null or char_length(${t.topic}) between 1 and 100`,
-    ),
-    check('vocabulary_entries_revision_positive', sql`${t.revision} >= 1`),
-  ],
-)
-
-export const vocabularyMeanings = pgTable(
-  'vocabulary_meanings',
-  {
-    id: uuid('id').primaryKey().defaultRandom(),
-    entryId: uuid('entry_id')
-      .notNull()
-      .references(() => vocabularyEntries.id, { onDelete: 'cascade' }),
-    definition: text('definition'),
-    grammaticalMetadata: jsonb('grammatical_metadata').$type<Record<string, unknown>>().notNull().default({}),
-  },
-  (t) => [
-    index('vocabulary_meanings_entry_idx').on(t.entryId),
-    unique('vocabulary_meanings_id_entry_key').on(t.id, t.entryId), // target of composite FK
-    check(
-      'vocabulary_meanings_definition_len',
-      sql`${t.definition} is null or char_length(${t.definition}) between 1 and 2000`,
-    ),
-    check(
-      'vocabulary_meanings_metadata_object',
-      sql`jsonb_typeof(${t.grammaticalMetadata}) = 'object' and octet_length(${t.grammaticalMetadata}::text) <= 4096`,
-    ),
-  ],
-)
-
-export const acceptedAnswers = pgTable(
-  'accepted_answers',
-  {
-    id: uuid('id').primaryKey().defaultRandom(),
-    entryId: uuid('entry_id')
-      .notNull()
-      .references(() => vocabularyEntries.id, { onDelete: 'cascade' }),
-    meaningId: uuid('meaning_id'),
-    language: text('language').notNull(),
-    answerText: text('answer_text').notNull(),
-    normalizedText: text('normalized_text').notNull(),
-    isPrimary: boolean('is_primary').notNull().default(false),
-  },
-  (t) => [
-    // A meaning must belong to the same entry (US-VOC-04). MATCH SIMPLE: skipped when meaning_id is null.
-    foreignKey({
-      name: 'accepted_answers_meaning_entry_fk',
-      columns: [t.meaningId, t.entryId],
-      foreignColumns: [vocabularyMeanings.id, vocabularyMeanings.entryId],
-    }).onDelete('cascade'),
-    index('accepted_answers_entry_language_idx').on(t.entryId, t.language),
-    index('accepted_answers_meaning_idx').on(t.meaningId),
-    uniqueIndex('accepted_answers_one_primary_idx')
-      .on(t.entryId, t.language)
-      .where(sql`${t.isPrimary}`),
-    check('accepted_answers_language_code', sql`${t.language} ~ '^[a-z]{2}$'`),
-    check('accepted_answers_text_len', sql`char_length(${t.answerText}) between 1 and 500`),
-    // An empty normalized answer would match empty input: never allowed (CLAUDE.md rule 3).
-    check('accepted_answers_normalized_len', sql`char_length(${t.normalizedText}) between 1 and 500`),
-  ],
-)
-
-export const answerChangeLog = pgTable(
-  'answer_change_log',
-  {
-    id: uuid('id').primaryKey().defaultRandom(),
-    answerId: uuid('answer_id').notNull(), // soft reference: the log outlives a deleted answer
-    entryId: uuid('entry_id')
-      .notNull()
-      .references(() => vocabularyEntries.id, { onDelete: 'cascade' }),
-    userId: uuid('user_id')
-      .notNull()
-      .references(() => users.id, { onDelete: 'cascade' }),
-    action: answerChangeActionEnum('action').notNull(),
-    before: jsonb('before').$type<Record<string, unknown>>(),
-    after: jsonb('after').$type<Record<string, unknown>>(),
-    createdAt: tsz('created_at').notNull().defaultNow(),
-  },
-  (t) => [
-    index('answer_change_log_entry_created_idx').on(t.entryId, t.createdAt),
-    index('answer_change_log_user_idx').on(t.userId),
-    check(
-      'answer_change_log_shape',
-      sql`
-    (${t.action} = 'create' and ${t.before} is null and ${t.after} is not null) or
-    (${t.action} = 'update' and ${t.before} is not null and ${t.after} is not null) or
-    (${t.action} = 'delete' and ${t.before} is not null and ${t.after} is null)`,
-    ),
-    check(
-      'answer_change_log_objects',
-      sql`(${t.before} is null or jsonb_typeof(${t.before}) = 'object') and (${t.after} is null or jsonb_typeof(${t.after}) = 'object')`,
-    ),
-  ],
-)
-
-export const answerFlags = pgTable(
-  'answer_flags',
-  {
-    id: uuid('id').primaryKey().defaultRandom(),
-    userId: uuid('user_id')
-      .notNull()
-      .references(() => users.id, { onDelete: 'cascade' }),
-    entryId: uuid('entry_id')
-      .notNull()
-      .references(() => vocabularyEntries.id, { onDelete: 'cascade' }),
-    direction: directionEnum('direction').notNull(),
-    submittedAnswer: text('submitted_answer').notNull(),
-    status: approvalStatusEnum('status').notNull().default('pending'),
-    createdAt: tsz('created_at').notNull().defaultNow(),
-  },
-  (t) => [
-    index('answer_flags_user_status_created_idx').on(t.userId, t.status, t.createdAt),
-    index('answer_flags_entry_idx').on(t.entryId),
-    check('answer_flags_submitted_len', sql`char_length(${t.submittedAnswer}) between 1 and 500`),
-  ],
-)
-```
-
-```ts
-// server/db/schema/srs.ts — writable ONLY from server/services/srs/** (lint rule, D12)
-export const srsCards = pgTable(
-  'srs_cards',
-  {
-    id: uuid('id').primaryKey().defaultRandom(), // = ts-fsrs cardId
-    userId: uuid('user_id')
-      .notNull()
-      .references(() => users.id, { onDelete: 'cascade' }),
-    entryId: uuid('entry_id')
-      .notNull()
-      .references(() => vocabularyEntries.id, { onDelete: 'cascade' }),
-    direction: directionEnum('direction').notNull(),
-    state: srsStateEnum('state').notNull().default('new'),
-    scheduleStatus: srsScheduleStatusEnum('schedule_status').notNull().default('new'), // D1
-    dueAt: tsz('due_at').notNull(),
-    stability: doublePrecision('stability').notNull().default(0),
-    stabilityFast: doublePrecision('stability_fast'), // D1, FSRS-7 only
-    difficulty: doublePrecision('difficulty').notNull().default(0),
-    scheduledDays: doublePrecision('scheduled_days').notNull().default(0),
-    learningSteps: integer('learning_steps').notNull().default(0), // ts-fsrs learningStep
-    reps: integer('reps').notNull().default(0),
-    lapses: integer('lapses').notNull().default(0),
-    lastReviewAt: tsz('last_review_at'),
-    schedulerVersion: text('scheduler_version').notNull(), // e.g. 'ts-fsrs@6.0.0/fsrs-7'
-    updatedAt: tsz('updated_at').notNull().defaultNow(),
-  },
-  (t) => [
-    unique('srs_cards_user_entry_direction_key').on(t.userId, t.entryId, t.direction),
-    index('srs_cards_user_due_idx').on(t.userId, t.dueAt), // due queue + due counts
-    index('srs_cards_entry_idx').on(t.entryId),
-    // `x < 'Infinity'` also rejects NaN (NaN sorts above Infinity in Postgres; `NaN >= 0` is TRUE)
-    check('srs_cards_stability_finite', sql`${t.stability} >= 0 and ${t.stability} < 'Infinity'::float8`),
-    check(
-      'srs_cards_stability_fast_finite',
-      sql`${t.stabilityFast} is null or (${t.stabilityFast} >= 0 and ${t.stabilityFast} < 'Infinity'::float8)`,
-    ),
-    check('srs_cards_difficulty_range', sql`${t.difficulty} >= 0 and ${t.difficulty} <= 10`),
-    check(
-      'srs_cards_scheduled_days_finite',
-      sql`${t.scheduledDays} >= 0 and ${t.scheduledDays} < 'Infinity'::float8`,
-    ),
-    check(
-      'srs_cards_counters',
-      sql`${t.learningSteps} >= 0 and ${t.reps} >= 0 and ${t.lapses} >= 0 and ${t.lapses} <= ${t.reps}`,
-    ),
-    check('srs_cards_scheduler_version_len', sql`char_length(${t.schedulerVersion}) between 1 and 64`),
-  ],
-)
-
-export const srsReviewLogs = pgTable(
-  'srs_review_logs',
-  {
-    id: uuid('id').primaryKey().defaultRandom(),
-    cardId: uuid('card_id')
-      .notNull()
-      .references(() => srsCards.id, { onDelete: 'cascade' }),
-    clientReviewId: uuid('client_review_id').notNull(),
-    rating: srsRatingEnum('rating').notNull(),
-    reviewedAt: tsz('reviewed_at').notNull(),
-    previousState: jsonb('previous_state').$type<Record<string, unknown>>().notNull(), // full pre-review card
-    nextState: jsonb('next_state').$type<Record<string, unknown>>().notNull(), // full post-review card
-    previousDueAt: tsz('previous_due_at').notNull(),
-    nextDueAt: tsz('next_due_at').notNull(),
-    schedulerVersion: text('scheduler_version').notNull(),
-  },
-  (t) => [
-    uniqueIndex('srs_review_logs_client_review_id_key').on(t.clientReviewId),
-    index('srs_review_logs_card_reviewed_idx').on(t.cardId, t.reviewedAt),
-    check(
-      'srs_review_logs_states_objects',
-      sql`jsonb_typeof(${t.previousState}) = 'object' and jsonb_typeof(${t.nextState}) = 'object'`,
-    ),
-    check('srs_review_logs_due_order', sql`${t.nextDueAt} >= ${t.reviewedAt}`),
-    check('srs_review_logs_scheduler_version_len', sql`char_length(${t.schedulerVersion}) between 1 and 64`),
-  ],
-)
-
-/** ts-fsrs DefaultScheduler card key → srs_cards property. A unit test asserts full coverage (§5.1). */
-export const FSRS_CARD_FIELD_MAP = {
-  cardId: 'id',
-  state: 'state',
-  scheduleStatus: 'scheduleStatus',
-  dueAt: 'dueAt',
-  lastReviewAt: 'lastReviewAt',
-  stability: 'stability',
-  stabilityFast: 'stabilityFast',
-  difficulty: 'difficulty',
-  scheduledDays: 'scheduledDays',
-  learningStep: 'learningSteps',
-  reps: 'reps',
-  lapses: 'lapses',
-} as const
-```
-
-```ts
-// server/db/schema/practice.ts — append-only, no relation to srs_*
-export const practiceAttempts = pgTable(
-  'practice_attempts',
-  {
-    id: uuid('id').primaryKey().defaultRandom(),
-    userId: uuid('user_id')
-      .notNull()
-      .references(() => users.id, { onDelete: 'cascade' }),
-    entryId: uuid('entry_id')
-      .notNull()
-      .references(() => vocabularyEntries.id, { onDelete: 'cascade' }),
-    exerciseType: exerciseTypeEnum('exercise_type').notNull(),
-    direction: directionEnum('direction').notNull(),
-    sourceMode: practiceSourceModeEnum('source_mode').notNull(),
-    submittedAnswer: text('submitted_answer').notNull(),
-    matchedAnswerId: uuid('matched_answer_id').references(() => acceptedAnswers.id, { onDelete: 'set null' }),
-    isCorrect: boolean('is_correct').notNull(),
-    diff: jsonb('diff').$type<unknown[]>(),
-    sessionId: uuid('session_id').notNull(), // client/practice-session id; no table in MVP
-    createdAt: tsz('created_at').notNull().defaultNow(),
-  },
-  (t) => [
-    index('practice_attempts_user_created_idx').on(t.userId, t.createdAt),
-    index('practice_attempts_entry_idx').on(t.entryId),
-    index('practice_attempts_matched_answer_idx').on(t.matchedAnswerId),
-    check('practice_attempts_submitted_len', sql`char_length(${t.submittedAnswer}) <= 500`),
-    // a match implies correct; the reverse can't be required because SET NULL clears the id
-    check('practice_attempts_match_implies_correct', sql`${t.matchedAnswerId} is null or ${t.isCorrect}`),
-    check('practice_attempts_diff_array', sql`${t.diff} is null or jsonb_typeof(${t.diff}) = 'array'`),
-  ],
-)
-```
+**Sentence slots (decision: one jsonb column, not a child table).** `slots` is an array of 1–10
+`{ "start": int, "end": int, "answer": string }`: character offsets into `sentence` (end exclusive) and
+the expected text, which must be non-blank. One CHECK (`sentence_examples_slots_format`, via the
+immutable `jsonb_path_exists`) validates shape, integer offsets, `0 ≤ start < end ≤ char_length(sentence)`,
+and size ≤ 4 KB. Slots are always read and written with their sentence, so a child table would only add
+joins and grants. Overlap between slots is left to Zod (LEX for CTX, post-MVP).
 
 **Delete behaviour (GDPR, architecture §8):** `users` → (collections, answer_change_log, answer_flags,
-srs_cards, practice_attempts) CASCADE; `collections` → `vocabulary_entries` CASCADE; `vocabulary_entries` →
-(meanings, accepted_answers, answer_change_log, answer_flags, srs_cards, practice_attempts) CASCADE;
-`vocabulary_meanings` → `accepted_answers` CASCADE (composite FK); `srs_cards` → `srs_review_logs` CASCADE;
+srs_cards, srs_review_logs, practice_attempts) CASCADE; `collections` → `vocabulary_entries` CASCADE; `vocabulary_entries` →
+(meanings, accepted_answers, synonyms, sentence examples, answer_change_log, answer_flags, srs_cards,
+practice_attempts) CASCADE; `vocabulary_meanings` → (accepted_answers, synonyms, sentence examples)
+CASCADE (composite FKs); `srs_cards` → `srs_review_logs` CASCADE;
 `accepted_answers` → `practice_attempts.matched_answer_id` SET NULL. **No FK action ever UPDATEs
 `srs_cards`**, so editing content can't touch scheduling (US-VOC-02). `DELETE FROM users WHERE id = $1`
 removes everything. Verified in the probe: FK cascade actions run as the **table owner**, so cascades
@@ -493,18 +155,37 @@ savepoints share it). Only `SECURITY DEFINER` trigger functions read or write th
 has no privilege on schema `srs_guard`, so it can't forge, read, replay, or clear a grant, and no
 setting (`set_config`) has any effect on the guard.
 
-1. `AFTER INSERT ON srs_review_logs` (definer) opens the grant `(log_id, card_id, xact_id)`. It refuses
-   if this transaction already has an open grant (`SR003`), so at most one log is pending.
+1. `AFTER INSERT ON srs_review_logs` (definer) checks that the log's `user_id` is the card's user
+   (`RC001`) and that `entry_revision` isn't ahead of the entry (`RC004`), then opens the grant
+   `(log_id, card_id, xact_id)`. It refuses if this transaction already has an open grant (`SR003`).
 2. `BEFORE UPDATE ON srs_cards` (definer): identity columns never change (`SR005`). If any of the 12
-   scheduling columns changes, the transaction's grant must exist (`SR001`) and its log must have
-   `card_id = NEW.id`, `previous_due_at = OLD.due_at`, `next_due_at = NEW.due_at`, and
-   `scheduler_version = NEW.scheduler_version` (`SR002`). The grant is then **deleted** (one log authorizes
-   exactly one update) and `updated_at` is set.
+   scheduling columns changes, the transaction's grant must exist (`SR001`), and the update must be
+   **exactly** the logged transition, otherwise `SR002` (security review M1):
+   - `card_id = NEW.id`, `previous_due_at = OLD.due_at`, `next_due_at = NEW.due_at`,
+     `scheduler_version = NEW.scheduler_version`;
+   - `NEW.last_review_at = reviewed_at`, `reviewed_at ≥ OLD.last_review_at`, `NEW.due_at > reviewed_at`;
+   - `NEW.reps = OLD.reps + 1`; `NEW.lapses` is `OLD.lapses` or `OLD.lapses + 1`, and `+1` only with `again`;
+   - `previous_state` equals the card before and `next_state` the card after, for all 12 scheduling
+     columns (`srs_guard.snapshot_matches`).
+
+   The grant is then **deleted** (one log authorizes exactly one update) and `updated_at` is set.
+
+   **Snapshot format** (`SRS_SNAPSHOT_KEYS` in `server/db/schema/srs.ts`): exactly the 12 scheduling
+   columns as Drizzle camelCase keys (`state`, `scheduleStatus`, `dueAt`, `stability`, `stabilityFast`,
+   `difficulty`, `scheduledDays`, `learningSteps`, `reps`, `lapses`, `lastReviewAt`, `schedulerVersion`);
+   enum labels as strings, numbers as JSON numbers (so NaN/Infinity can't appear), timestamps as ISO 8601
+   with milliseconds, `null` only for an absent `stabilityFast`/`lastReviewAt`. Missing or extra keys,
+   wrong types, or any differing value → `SR002`. The LEX-007 mapper converts ts-fsrs cards to this
+   shape (`learningStep` → `learningSteps`, numeric `state` → label). Because snapshots can't carry
+   microseconds, SRS timestamps are stored with millisecond precision (CHECKs; the insert trigger
+   truncates `due_at`).
+
 3. `CONSTRAINT TRIGGER … DEFERRABLE INITIALLY DEFERRED` on `srs_review_logs` (definer): **at COMMIT**, a
    log whose grant still exists aborts the transaction (`SR004`). A log can't be stored without its card
    update, autocommit log inserts fail, and `SET CONSTRAINTS ALL IMMEDIATE` fails closed.
 4. `BEFORE INSERT ON srs_cards` (invoker, no table access): inserts must be a **pristine new card**
-   (`SR006`). Card creation can't write history (US-VOC-03). `ON CONFLICT DO NOTHING` works for idempotent
+   with `due_at ≤ now() + 5 minutes` (no silently suspended cards) (`SR006`); `due_at` is truncated to
+   milliseconds and `updated_at := now()` (security review L1). Card creation can't write history (US-VOC-03). `ON CONFLICT DO NOTHING` works for idempotent
    creation; `ON CONFLICT DO UPDATE` of scheduling fields hits guard 2 and fails (`SR001`).
 5. **DELETE** is not a trigger concern: the app role has no DELETE on `srs_cards` or `srs_review_logs`
    (§4). Cards and logs only disappear through entry, collection, or user cascades.
@@ -526,6 +207,10 @@ maps them to a 500 response, because they always indicate a bug, never a user er
 | `SR005` | card identity columns are immutable                   |
 | `SR006` | card insert is not a pristine new card                |
 
+Shared with the integrity triggers (§D7, `0003`): `RC001` owner mismatch · `RC002` collection languages
+immutable once entries exist · `RC003` language outside the collection's pair · `RC004` `entry_revision`
+ahead of the entry.
+
 ### 3.2 SQL
 
 `server/db/migrations/0002_srs_guard.sql` (custom migration, statements separated with
@@ -536,8 +221,8 @@ maps them to a 500 response, because they always indicate a bug, never a user er
 ```
 BEGIN                                            -- top-level db.transaction()
   SELECT … FROM srs_cards WHERE id = $card AND user_id = $session FOR UPDATE
-  SELECT … FROM srs_review_logs l JOIN srs_cards c ON c.id = l.card_id
-    WHERE l.client_review_id = $crid AND c.user_id = $session          -- replay lookup is owner-scoped
+  SELECT … FROM srs_review_logs
+    WHERE card_id = $card AND client_review_id = $crid                  -- replay lookup, per card (L4)
   INSERT INTO srs_review_logs (…)                -- opens grant
   UPDATE srs_cards SET …next                     -- consumes grant
 COMMIT                                           -- deferred check passes
@@ -583,29 +268,40 @@ provider in production (LEX-017). Migrations contain no passwords and no `CREATE
 
 ### 4.2 Privilege matrix for `recallio_app` (custom migration `0004_app_role_grants.sql`)
 
-| Table                                                                                       | Privileges                                                             |
-| ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| users, collections, vocabulary_entries, vocabulary_meanings, accepted_answers, answer_flags | SELECT, INSERT, UPDATE, DELETE                                         |
-| answer_change_log, practice_attempts, srs_review_logs                                       | SELECT, INSERT (append-only)                                           |
-| srs_cards                                                                                   | SELECT, INSERT, UPDATE **(the 12 scheduling columns only)**; no DELETE |
-| `drizzle.*`, `srs_guard.*`, trigger functions                                               | none                                                                   |
+UPDATE is **column-level everywhere** (security review H1): keys, owner and parent columns (`id`,
+`owner_id`, `collection_id`, `entry_id`, `user_id`, `card_id`) and `created_at` are never updatable, so a
+row can't be moved to another user or parent after the insert-time checks ran (this also closes the
+"move the entry to bypass RC002" gap).
+
+| Table                                 | Table-level            | UPDATE columns                                                                                                  |
+| ------------------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------- |
+| users                                 | SELECT, INSERT, DELETE | email, password_hash, native_language, daily_new_limit, daily_review_limit, timezone                            |
+| collections                           | SELECT, INSERT, DELETE | title, native_language, target_language, description, topic, normalization, archived_at                         |
+| vocabulary_entries                    | SELECT, INSERT, DELETE | target_expression, normalized_target_expression, native_expression, part_of_speech, topic, revision, updated_at |
+| vocabulary_meanings                   | SELECT, INSERT, DELETE | definition, grammatical_metadata                                                                                |
+| accepted_answers                      | SELECT, INSERT, DELETE | meaning_id, language, answer_text, normalized_text, is_primary                                                  |
+| answer_flags                          | SELECT, INSERT, DELETE | status                                                                                                          |
+| vocabulary_synonyms                   | SELECT, INSERT, DELETE | meaning_id, language, text, normalized_text, approval_status                                                    |
+| sentence_examples                     | SELECT, INSERT, DELETE | meaning_id, language, sentence, translation, target_answer, slots, approval_status                              |
+| answer_change_log                     | SELECT, INSERT         | none (append-only)                                                                                              |
+| practice_attempts                     | SELECT, INSERT         | none (append-only)                                                                                              |
+| srs_review_logs                       | SELECT, INSERT         | none (append-only)                                                                                              |
+| srs_cards                             | SELECT, INSERT         | the 12 scheduling columns; no DELETE                                                                            |
+| `drizzle.*`, `srs_guard.*`, functions | none                   |                                                                                                                 |
 
 No TRUNCATE, REFERENCES, or TRIGGER privileges anywhere. No CREATE on any schema. No ownership of
-anything. Column-level UPDATE on `srs_cards` also makes `user_id/entry_id/direction` unwritable by
-privilege, before the trigger even runs. `SELECT … FOR UPDATE` works because the role has UPDATE on at
-least one column.
+anything. `SELECT … FOR UPDATE/SHARE` works because the role has UPDATE on at least one column of each
+locked table. `meaning_id` stays updatable: the composite FK keeps it on the same entry.
 
-```sql
-REVOKE ALL ON SCHEMA public FROM PUBLIC;
-GRANT USAGE ON SCHEMA public TO recallio_app;
-REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC;
-GRANT SELECT, INSERT, UPDATE, DELETE ON users, collections, vocabulary_entries, vocabulary_meanings,
-  accepted_answers, answer_flags TO recallio_app;
-GRANT SELECT, INSERT ON answer_change_log, practice_attempts, srs_review_logs, srs_cards TO recallio_app;
-GRANT UPDATE (state, schedule_status, due_at, stability, stability_fast, difficulty, scheduled_days,
-  learning_steps, reps, lapses, last_review_at, scheduler_version) ON srs_cards TO recallio_app;
--- updated_at is set by the guard trigger, so the app role can't write it.
-```
+**Deviation from review L1 (column-level INSERT on `srs_cards`): not applied.** Drizzle's `insert()`
+lists every column of the table and sends `DEFAULT` for unset ones, and Postgres checks column INSERT
+privilege even for `DEFAULT` (verified). A column-level INSERT grant would make every Drizzle card insert
+fail with 42501, including the reviewers' `fsrs-roundtrip` test. INSERT stays table-level; the insert
+trigger enforces the same guarantee (pristine values, `due_at` bound, forced `updated_at`), and the
+format CHECK pins `scheduler_version`. If column-level INSERT is still wanted, card creation (LEX-005)
+must use a `sql` template instead of `db.insert(srsCards)`: a decision for Alina.
+
+The exact grant statements are in `server/db/migrations/0004_app_role_grants.sql`.
 
 No `ALTER DEFAULT PRIVILEGES`: every new table needs an explicit grant in its own migration. The
 privilege-matrix test (§5.4) fails on any table missing from the matrix.
@@ -653,8 +349,13 @@ TEST_DATABASE_MIGRATOR_URL=postgres://recallio_migrator:change-me-locally-migrat
   `generate`/`check` don't need a database URL, so the drift check runs without one.
 - **Boot privilege check (D9):** `server/utils/db-privileges.ts` (`findDbRoleProblems`) checks, for the
   current role and every role it can `SET ROLE` to: superuser, CREATEROLE/CREATEDB, BYPASSRLS,
-  REPLICATION, membership in `pg_write_all_data`, CREATE or TEMP on the database, CREATE on any schema,
-  ownership of the database, a schema, a relation, or a function, and TRUNCATE/TRIGGER on any table.
+  REPLICATION, membership in `pg_write_all_data` or `pg_execute_server_program` / `pg_read_server_files` /
+  `pg_write_server_files`, `SET` on `session_replication_role`, CREATE or TEMP on the database, CREATE on
+  any schema, ownership of the database, a schema, a relation, or a function, TRUNCATE/TRIGGER on any
+  table, USAGE on `srs_guard`, UPDATE/DELETE on `srs_review_logs`, and DELETE on `srs_cards` (review L3).
+  Object lookups use `to_regnamespace`/`to_regclass`, so a missing object reads as "no privilege"
+  instead of throwing. The file is the one reviewed exception to the SRS lint rule (it names the SRS
+  objects in catalog queries only).
   - `server/plugins/02.db-privileges.ts` runs the check at boot. A **built** server with any problem logs
     the problem descriptions (fixed strings, never values) and exits with code 1. The dev server only warns.
   - `server/middleware/00.db-role.ts` keeps a built server **closed** (503) until the check has passed,
@@ -717,6 +418,10 @@ TEST_DATABASE_MIGRATOR_URL=postgres://recallio_migrator:change-me-locally-migrat
   - `expectPgError(p, { code, constraint? })`: asserts on SQLSTATE and constraint name, never on message text.
 - **Isolation:** `beforeEach` runs `TRUNCATE` on all `public` tables `CASCADE` (as migrator). Tests
   commit for real, because the deferred trigger only fires at COMMIT, so rollback-per-test can't be used.
+- **One run at a time (review M3):** the global setup takes `pg_try_advisory_lock` on its own migrator
+  session for the whole run and fails fast with a clear message if another run holds it. Concurrency
+  tests wait with `waitForLockWait()` (polls `pg_stat_activity` for a lock wait) instead of timers, and
+  always release the held transaction in `finally`.
 - Requires `pnpm db:up`. CI uses a Postgres 17 service container and the same init script (LEX-017).
 
 ### 6.3 Constraints (`schema.constraints.test.ts`, as **app** role)
@@ -788,13 +493,26 @@ TEST_DATABASE_MIGRATOR_URL=postgres://recallio_migrator:change-me-locally-migrat
 
 ### 6.7 Migrations (`migrations.test.ts`)
 
-- M1: after global setup, the catalog lists the expected tables, enums (with value order), triggers, and the deferred constraint trigger.
-- M2: running `migrate()` a second time is a no-op.
-- M3 (CI script): no schema drift (§5).
+- M1: after global setup, the catalog lists the expected tables, enums (with value order), triggers
+  (only the log check deferred), and functions (search_path pinned, no EXECUTE for the app role).
+- M2: running `migrate()` a second time is a no-op. M3: the run lock is held.
+- Drift: `pnpm db:generate` reports no changes; `schema-parity.test.ts` compares the Drizzle schema with
+  the migrated catalog (columns, types, nullability, constraints, indexes).
 
-**E2E:** none. LEX-002 has no UI. The practice-mode "SRS unchanged" regression tests (rule 1) are owned by LEX-011/012 and use these helpers.
+### 6.8 Added by the security and tester reviews
 
----
+| File                         | Covers                                                                                                              |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `srs-guard.security.test.ts` | No SET ROLE / replication role / catalog shadowing; stale concurrent review → SR002; exact-match rules; insert pins |
+| `ownership.security.test.ts` | Owner/parent columns not updatable (H1); RC002 race: entry insert waits for a language change (L2)                  |
+| `integrity-gaps.test.ts`     | Moving an entry can't bypass RC002; answer language in the collection pair                                          |
+| `fsrs-roundtrip.test.ts`     | Real ts-fsrs 6 cards (FSRS-7 and FSRS-6) through the guarded path with Drizzle: lossless card and snapshots         |
+| `schema-parity.test.ts`      | Drizzle schema = migrated catalog                                                                                   |
+| `srs-separation.test.ts`     | Every practice mode × type × direction and every content write leaves `srs_*` byte-identical (rule 1)               |
+| `review-concurrency.test.ts` | Same-card replay waits on the row lock then 23505; two submissions serialize                                        |
+| `query-indexes.test.ts`      | The planned query shapes can use their indexes                                                                      |
+| `content-tables.test.ts`     | Synonyms and examples (composite FK, RC003, grants, cascade, slot format); answer/flag duplicates                   |
+| `review-history.test.ts`     | Log owner (RC001), entry revision (RC004), previous_state / lapse / date rules, ms-precision inserts                |
 
 ## 7. Decisions (final outcome in the last column)
 
@@ -816,6 +534,12 @@ D1 and D5–D10 were approved as recommended. D2 was rejected, D3 = (b), D4 = B.
 **Small decisions made (FYI, no approval needed):**
 
 - PKs use `gen_random_uuid()`.
+- Review additions decided by the backend: the guard also checks `previous_state` against the card
+  before the update and requires `NEW.due_at > reviewed_at` and "lapse only on again"; SRS timestamps
+  have millisecond precision (CHECKs); `answer_flags` "open" means `status = 'pending'`; RC004 bounds
+  `entry_revision` by the entry's current revision (not equality, since a user may answer a prompt
+  rendered from the previous revision); `accepted_answers_entry_language_idx` was dropped (the new
+  unique index has the same prefix).
 - Text and range limits as in §2.3 (Zod mirrors them).
 - `normalization` and `grammatical_metadata` default to `'{}'`.
 - `practice_attempts.matched_answer_id` uses ON DELETE SET NULL; `answer_change_log.answer_id` is a soft reference.
@@ -832,6 +556,24 @@ D1 and D5–D10 were approved as recommended. D2 was rejected, D3 = (b), D4 = B.
 
 ---
 
+## 7a. Review fixes (security and tester reviews, applied in place before merge)
+
+| Finding     | Fix                                                                                                                                                           |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Security H1 | Column-level UPDATE everywhere; owner/parent/key columns never updatable (§4.2). Also closes tester M1 (moving an entry bypassed RC002).                      |
+| Security M1 | Exact log ↔ update match, documented camelCase snapshot format (§3.1).                                                                                        |
+| Security L1 | Insert trigger: `due_at ≤ now() + 5 min`, ms truncation, `updated_at := now()`; `scheduler_version` format CHECK. Column-level INSERT **not applied** (§4.2). |
+| Security L2 | `vocabulary_entries_lock_collection` (BEFORE INSERT, `FOR SHARE` on the collection) serializes entry inserts with language changes.                           |
+| Security L3 | Boot check extended (§4.4).                                                                                                                                   |
+| Security L4 | `UNIQUE (card_id, client_review_id)`; replay lookup per card.                                                                                                 |
+| Tester M2   | `entry_revision` on `srs_review_logs` and `practice_attempts` (≤ entry revision, RC004); `practice_attempts.expected_answer`.                                 |
+| Tester L1   | `srs_review_logs.user_id` (FK cascade, = card user, RC001) and index `(user_id, reviewed_at)`.                                                                |
+| Tester L2   | RC003: answer/synonym/example language must be one of the collection's two languages.                                                                         |
+| Tester L3   | `UNIQUE (entry_id, language, normalized_text)` on answers and synonyms; unique open flag.                                                                     |
+| Tester L4   | `vocabulary_entries.normalized_target_expression` + index `(collection_id, normalized_target_expression)`.                                                    |
+| Tester M3   | Advisory run lock; `waitForLockWait()` instead of timers.                                                                                                     |
+| New scope   | `vocabulary_synonyms` and `sentence_examples` (slots as jsonb, §2.3).                                                                                         |
+
 ## 8. Files and owners
 
 | File                                                                                                                                                                                   | Action              | Owner                                        |
@@ -843,7 +585,7 @@ D1 and D5–D10 were approved as recommended. D2 was rejected, D3 = (b), D4 = B.
 | `server/db/migrations/0001_*.sql` + `meta/*` (generated)                                                                                                                               | create              | backend                                      |
 | `server/db/migrations/0002_srs_guard.sql`, `0003_integrity_triggers.sql` (D7), `0004_app_role_grants.sql`                                                                              | create (custom)     | backend                                      |
 | `server/utils/env.ts`                                                                                                                                                                  | modify              | backend                                      |
-| `server/utils/db-privileges.ts`, `server/db/role-gate.ts`, `server/plugins/02.db-privileges.ts`, `server/middleware/00.db-role.ts` (D9)                                                | create              | backend                                      |
+| `server/utils/db-privileges.ts` (lint exception), `server/db/role-gate.ts`, `server/plugins/02.db-privileges.ts`, `server/middleware/00.db-role.ts` (D9)                               | create              | backend                                      |
 | `drizzle.config.ts`, `compose.yaml`, `docker/postgres/initdb/10-roles.sh`, `.env.example`, `package.json` (scripts), `eslint.config.mjs` (D12)                                         | modify/create       | backend                                      |
 | `vitest.config.ts` (integration project), `tests/integration/**`, `tests/unit/{fsrs-mapping,enums,languages}.test.ts`, `tests/unit/env.test.ts`, `tests/security/env.security.test.ts` | create/modify       | tester                                       |
 | `docs/architecture.md` §4/§5/§8, README, CLAUDE.md "Commands"                                                                                                                          | modify              | docs (CLAUDE.md rule text only by Alina, D3) |
@@ -858,13 +600,17 @@ The uncommitted `ts-fsrs` addition in `package.json`/`pnpm-lock.yaml` belongs on
 
 1. **SRS isolation.** Layers 1, 3, and 4 now exist at the DB level: the trigger, private grants, column
    grants, no DELETE, and append-only logs. Residual risk: §3.6 (the DB can't verify FSRS math).
-2. **Idempotency leak across users.** `client_review_id` is globally unique. The replay lookup **must**
-   join `srs_cards` on `user_id = session user`, or another user's stored result could be returned. A
-   collision across users returns 409/404, never the other user's data. This must be an IDOR test in LEX-009.
+2. **Idempotency across users.** `client_review_id` is unique **per card** (L4), so one user's id can't
+   block or reveal another user's review. The service still loads the card owner-scoped first
+   (`user_id = session user`, 404 otherwise) before the per-card replay lookup. IDOR test in LEX-009.
 3. **Atomicity depends on order.** Log first, then card, one card per transaction, no `SET CONSTRAINTS
 IMMEDIATE`. Any other order fails closed (`SR001`/`SR004`), so the only risk is availability, never integrity.
-4. **Float hazards.** `NaN` passes `>= 0` checks in Postgres. All float checks use `< 'Infinity'`. The
-   mapper (LEX-007) must also reject non-finite numbers before the write.
+4. **Float hazards.** `NaN` passes `>= 0` checks in Postgres. All float checks use `< 'Infinity'`, and
+   the JSON snapshot can't carry NaN/Infinity, so the guard rejects them first. The mapper (LEX-007)
+   must also reject non-finite numbers before the write.
+   4a. **Snapshot exactness.** The review service must build `previous_state` from the locked row and
+   `next_state` from exactly the values it writes, with JS (millisecond) timestamps. Using `now()` in
+   SQL for `reviewed_at` would fail closed (`SR002`/CHECK).
 5. **ts-fsrs drift.** A version bump can add card fields or change semantics (FSRS-7 already did). U2
    fails on new fields. `scheduler_version` is stored on every card and log, and `ts-fsrs` stays pinned.
 6. **Empty normalized answers** would match empty submissions. The DB check forbids them, and the
@@ -873,7 +619,11 @@ IMMEDIATE`. Any other order fails closed (`SR001`/`SR004`), so the only risk is 
    migrator. Plan R2 enum additions as separate releases.
 8. **Local migration.** Developers must recreate the Docker volume once (D8). The README and PR must say so.
 9. **Ownership.** `vocabulary_entries` has no `user_id`. Ownership goes through `collections.owner_id`.
-   D7(a) catches mismatched `user_id` on user-scoped child rows. Services must still scope every query (rule 5).
+   D7(a) catches mismatched `user_id` on user-scoped child rows at insert time, and column grants keep
+   owner/parent columns immutable afterwards. Services must still scope every query (rule 5).
+   9a. **Language consistency.** Collection languages are immutable once entries exist (RC002, with the
+   `FOR SHARE` lock closing the insert race), and answers/synonyms/examples must use one of the pair
+   (RC003). Entries can't move between collections.
 10. **History integrity.** Logs and attempts are append-only for the app role. Content edits never
     cascade into them. Deleting an answer only nulls `matched_answer_id`.
 11. **Cascade-as-owner** is Postgres behaviour this design depends on. X1/X3 lock it in.
