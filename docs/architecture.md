@@ -10,22 +10,22 @@ Decisions are recorded in §12. Hosting is the only open question left.
 
 ## 1. Stack
 
-| Concern | Choice | Why |
-| --- | --- | --- |
-| Framework | **Nuxt 4** (Vue 3, TypeScript strict) | One full-stack app. UI and API share types and validation. |
-| Backend | **Nitro server routes** (`server/api/**`) | Built into Nuxt, so there is no second server to maintain. |
-| Runtime | **Node.js ≥ 24** (local: 25.4) | Required by `ts-fsrs` v6. |
-| Database | **PostgreSQL 17** (Docker locally, managed in prod) | Transactions, row locks, and constraints are needed for SRS integrity. |
-| ORM / migrations | **Drizzle ORM + drizzle-kit** | Typed SQL with SQL-first migrations. |
-| Validation | **Zod** in `shared/` | One schema per payload, used on both client and server. |
-| Auth | **nuxt-auth-utils** | Sealed cookie sessions, scrypt password hashing (`hashPassword`), `requireUserSession`. |
-| Scheduling | **ts-fsrs v6** (FSRS-7 default), version pinned exactly | Established implementation, deterministic when fuzz is disabled. |
-| CSV | **papaparse** | Handles delimiter detection, quoted fields, and UTF-8. |
-| UI | **Nuxt UI v4** (Tailwind CSS v4) | Accessible primitives (Reka UI), responsive, keyboard-friendly. |
-| Security headers | **nuxt-security** | CSP, HSTS, X-Frame-Options, request size limits, rate limiting (§8). |
-| Tests | **Vitest** (`@nuxt/test-utils`) + **Playwright** | Unit, integration (real Postgres), and E2E/responsive tests. |
-| Lint / format | **ESLint (`@nuxt/eslint`) + Prettier**, `vue-tsc` typecheck | Run by hooks and CI. |
-| CI | **GitHub Actions** | Lint, typecheck, tests on every PR. |
+| Concern          | Choice                                                      | Why                                                                                     |
+| ---------------- | ----------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Framework        | **Nuxt 4** (Vue 3, TypeScript strict)                       | One full-stack app. UI and API share types and validation.                              |
+| Backend          | **Nitro server routes** (`server/api/**`)                   | Built into Nuxt, so there is no second server to maintain.                              |
+| Runtime          | **Node.js ≥ 24** (local: 25.4)                              | Required by `ts-fsrs` v6.                                                               |
+| Database         | **PostgreSQL 17** (Docker locally, managed in prod)         | Transactions, row locks, and constraints are needed for SRS integrity.                  |
+| ORM / migrations | **Drizzle ORM + drizzle-kit**                               | Typed SQL with SQL-first migrations.                                                    |
+| Validation       | **Zod** in `shared/`                                        | One schema per payload, used on both client and server.                                 |
+| Auth             | **nuxt-auth-utils**                                         | Sealed cookie sessions, scrypt password hashing (`hashPassword`), `requireUserSession`. |
+| Scheduling       | **ts-fsrs v6** (FSRS-7 default), version pinned exactly     | Established implementation, deterministic when fuzz is disabled.                        |
+| CSV              | **papaparse**                                               | Handles delimiter detection, quoted fields, and UTF-8.                                  |
+| UI               | **Nuxt UI v4** (Tailwind CSS v4)                            | Accessible primitives (Reka UI), responsive, keyboard-friendly.                         |
+| Security headers | **nuxt-security**                                           | CSP, HSTS, X-Frame-Options, request size limits, rate limiting (§8).                    |
+| Tests            | **Vitest** (`@nuxt/test-utils`) + **Playwright**            | Unit, integration (real Postgres), and E2E/responsive tests.                            |
+| Lint / format    | **ESLint (`@nuxt/eslint`) + Prettier**, `vue-tsc` typecheck | Run by hooks and CI.                                                                    |
+| CI               | **GitHub Actions**                                          | Lint, typecheck, tests on every PR.                                                     |
 
 ## 2. Repository structure
 
@@ -62,15 +62,15 @@ lives in `shared/` or in pure service functions so it can be unit-tested without
 
 ## 3. Domain modules (MVP)
 
-| Module | Responsibility | Issues |
-| --- | --- | --- |
-| `auth` | Register, login, logout, session, account deletion | LEX-003 |
-| `collections` | Language-pair collections. Languages are immutable once entries exist (DEC-001). | LEX-004 |
-| `vocabulary` | Entries, meanings, accepted answers, answer change log. Creates the 2 SRS cards per entry. | LEX-005 |
-| `import` | CSV parse → column mapping → preview → duplicate resolution → commit | LEX-006 |
-| `srs` | FSRS scheduler wrapper, due queue, review submission | LEX-007/008/009 |
-| `practice` | Answer validation, Typing, Multiple Choice, practice attempts | LEX-010–013 |
-| `analytics` | Read-only aggregates over the separate activity tables | LEX-014 |
+| Module        | Responsibility                                                                             | Issues          |
+| ------------- | ------------------------------------------------------------------------------------------ | --------------- |
+| `auth`        | Register, login, logout, session, account deletion                                         | LEX-003         |
+| `collections` | Language-pair collections. Languages are immutable once entries exist (DEC-001).           | LEX-004         |
+| `vocabulary`  | Entries, meanings, accepted answers, answer change log. Creates the 2 SRS cards per entry. | LEX-005         |
+| `import`      | CSV parse → column mapping → preview → duplicate resolution → commit                       | LEX-006         |
+| `srs`         | FSRS scheduler wrapper, due queue, review submission                                       | LEX-007/008/009 |
+| `practice`    | Answer validation, Typing, Multiple Choice, practice attempts                              | LEX-010–013     |
+| `analytics`   | Read-only aggregates over the separate activity tables                                     | LEX-014         |
 
 Release 2 and 3 modules (`context`, `listening`, `tests`, `guided`) follow the same pattern. They are
 practice-type modules, so they get **no** write access to SRS.
@@ -150,7 +150,7 @@ client → POST /api/review/submit { clientReviewId (uuid v7), cardId, rating, r
 bumping the version string. Existing cards keep their history and switch to the new scheduler on
 their next review.
 
-**Workload limits (US-SRS-04):** limits only cap *how many cards are served per day*. Overdue cards
+**Workload limits (US-SRS-04):** limits only cap _how many cards are served per day_. Overdue cards
 stay due and are never auto-completed. The dashboard shows `due total` vs. `remaining today`.
 "Today" is calculated in the user's time zone.
 
@@ -176,12 +176,12 @@ distractors, the question is skipped instead of degraded.
 
 Activity types are kept separate in storage (spec §12):
 
-| Event | Table | Written by |
-| --- | --- | --- |
-| `review_completed` | `srs_review_logs` | `srs` module only |
-| `practice_answer_submitted` | `practice_attempts` | `practice` module (`source_mode` = typing, mcq, difficult_words...) |
-| `test_completed` | `assessment_results` (R2) | `tests` module |
-| `guided_stage_completed` | `guided_session_entries` / `assessment_results` (R3) | `guided` module |
+| Event                       | Table                                                | Written by                                                          |
+| --------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------- |
+| `review_completed`          | `srs_review_logs`                                    | `srs` module only                                                   |
+| `practice_answer_submitted` | `practice_attempts`                                  | `practice` module (`source_mode` = typing, mcq, difficult_words...) |
+| `test_completed`            | `assessment_results` (R2)                            | `tests` module                                                      |
+| `guided_stage_completed`    | `guided_session_entries` / `assessment_results` (R3) | `guided` module                                                     |
 
 Every row records the source mode, exercise type, direction, timestamp, and outcome. Analytics only
 reads, and labels practice accuracy and FSRS retention as different metrics.
@@ -193,20 +193,21 @@ reads, and labels practice accuracy and FSRS retention as different metrics.
 **Level 2** as the verification checklist. Every PR is checked against this section by the
 `security` agent (§9).
 
-| OWASP risk | Controls in Recallio |
-| --- | --- |
-| **A01 Broken Access Control** | Every service takes `userId`. Queries are scoped by owner through `collections.owner_id` or `user_id`. The `requireOwner()` helper returns 404 (not 403) for other users' resources. Deny by default: all `/api/**` routes require a session except an explicit public allow-list (`/api/auth/register`, `/api/auth/login`). Integration tests check that user B can't access user A's data on every route (IDOR tests). UUIDs are used, but ownership checks never rely on IDs being hard to guess. |
-| **A02 Security Misconfiguration** | `nuxt-security` sets a strict CSP (no `unsafe-inline` scripts, nonces), HSTS, `X-Content-Type-Options`, `Referrer-Policy`, `frame-ancestors 'none'`, and a `Permissions-Policy`. Production builds have no stack traces, no source maps served publicly, and no devtools. CORS stays same-origin only. Secrets come only from env vars, validated at boot with Zod, and are never committed (`.env` is git-ignored, `.env.example` lists names only). |
-| **A03 Software Supply Chain** | `pnpm` with a committed lockfile and exact versions for security-relevant packages (ts-fsrs, auth). CI runs `pnpm audit --prod` and fails on high/critical findings. Dependabot handles updates, GitHub secret scanning and push protection are enabled, and GitHub Actions are pinned to commit SHAs. New dependencies need justification in the PR. |
-| **A04 Cryptographic Failures** | Passwords are hashed with scrypt (nuxt-auth-utils `hashPassword`), never logged or returned. The session cookie is sealed (iron) with a random secret of 32+ chars, and is `HttpOnly`, `Secure`, `SameSite=Lax`. TLS everywhere in production, including the DB connection (`sslmode=require`). No sensitive data in URLs or localStorage. |
-| **A05 Injection** | Drizzle uses parameterized queries only. Raw `sql` templates must use bound parameters, and `sql.raw()` is banned by a lint rule. Zod validates every body, query, and route param (types, lengths, enums, `strict()` to reject unknown keys). Vue escapes output by default, and `v-html` is banned by a lint rule. CSV cells starting with `= + - @` are neutralized on any future export (formula injection). |
-| **A06 Insecure Design** | Threat model per epic (written by `architect`). SRS isolation is enforced in four layers (§5). Business limits (daily limits, import caps) are enforced server-side. Destructive actions need confirmation and re-checked ownership. |
-| **A07 Authentication Failures** | Password policy follows NIST 800-63B: at least 12 chars, up to 128, no composition rules, checked against a common-password list. Login is rate-limited per IP and per account, with exponential backoff. Login and register return generic errors so they don't reveal which emails exist. The session is rotated on login and destroyed on logout. Idle timeout is 7 days and absolute timeout is 30 days. |
-| **A08 Software / Data Integrity** | CSRF: `SameSite=Lax` cookie, plus an `Origin`/`Sec-Fetch-Site` check on every mutating request, plus a CSRF token (`nuxt-security` CSRF). Review submissions are idempotent (`clientReviewId`). DB constraints and the trigger protect SRS integrity. Migrations are reviewed in PRs and never edited after merge. |
-| **A09 Logging & Alerting** | Structured JSON logs record auth successes and failures, access-denied events, rate-limit hits, import results, and account deletion, each with the user id and a request id. Passwords, session tokens, cookies, and full request bodies are never logged. |
-| **A10 Exceptional Conditions** | A central error handler maps errors to safe messages (`{ statusCode, message }`) with no internals. Transactions roll back on any error, and the default is fail-closed: if an ownership or validation check throws, the request is denied. Timeouts and limits apply to DB queries, body size (1 MB, 5 MB for CSV), and CSV row count (10,000). |
+| OWASP risk                        | Controls in Recallio                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **A01 Broken Access Control**     | Every service takes `userId`. Queries are scoped by owner through `collections.owner_id` or `user_id`. The `requireOwner()` helper returns 404 (not 403) for other users' resources. Deny by default: all `/api/**` routes require a session except an explicit public allow-list (`/api/auth/register`, `/api/auth/login`). Integration tests check that user B can't access user A's data on every route (IDOR tests). UUIDs are used, but ownership checks never rely on IDs being hard to guess. |
+| **A02 Security Misconfiguration** | `nuxt-security` sets a strict CSP (no `unsafe-inline` scripts, nonces), HSTS, `X-Content-Type-Options`, `Referrer-Policy`, `frame-ancestors 'none'`, and a `Permissions-Policy`. Production builds have no stack traces, no source maps served publicly, and no devtools. CORS stays same-origin only. Secrets come only from env vars, validated at boot with Zod, and are never committed (`.env` is git-ignored, `.env.example` lists names only).                                                |
+| **A03 Software Supply Chain**     | `pnpm` with a committed lockfile and exact versions for security-relevant packages (ts-fsrs, auth). CI runs `pnpm audit --prod` and fails on high/critical findings. Dependabot handles updates, GitHub secret scanning and push protection are enabled, and GitHub Actions are pinned to commit SHAs. New dependencies need justification in the PR.                                                                                                                                                |
+| **A04 Cryptographic Failures**    | Passwords are hashed with scrypt (nuxt-auth-utils `hashPassword`), never logged or returned. The session cookie is sealed (iron) with a random secret of 32+ chars, and is `HttpOnly`, `Secure`, `SameSite=Lax`. TLS everywhere in production, including the DB connection (`sslmode=require`). No sensitive data in URLs or localStorage.                                                                                                                                                           |
+| **A05 Injection**                 | Drizzle uses parameterized queries only. Raw `sql` templates must use bound parameters, and `sql.raw()` is banned by a lint rule. Zod validates every body, query, and route param (types, lengths, enums, `strict()` to reject unknown keys). Vue escapes output by default, and `v-html` is banned by a lint rule. CSV cells starting with `= + - @` are neutralized on any future export (formula injection).                                                                                     |
+| **A06 Insecure Design**           | Threat model per epic (written by `architect`). SRS isolation is enforced in four layers (§5). Business limits (daily limits, import caps) are enforced server-side. Destructive actions need confirmation and re-checked ownership.                                                                                                                                                                                                                                                                 |
+| **A07 Authentication Failures**   | Password policy follows NIST 800-63B: at least 12 chars, up to 128, no composition rules, checked against a common-password list. Login is rate-limited per IP and per account, with exponential backoff. Login and register return generic errors so they don't reveal which emails exist. The session is rotated on login and destroyed on logout. Idle timeout is 7 days and absolute timeout is 30 days.                                                                                         |
+| **A08 Software / Data Integrity** | CSRF: `SameSite=Lax` cookie, plus an `Origin`/`Sec-Fetch-Site` check on every mutating request, plus a CSRF token (`nuxt-security` CSRF). Review submissions are idempotent (`clientReviewId`). DB constraints and the trigger protect SRS integrity. Migrations are reviewed in PRs and never edited after merge.                                                                                                                                                                                   |
+| **A09 Logging & Alerting**        | Structured JSON logs record auth successes and failures, access-denied events, rate-limit hits, import results, and account deletion, each with the user id and a request id. Passwords, session tokens, cookies, and full request bodies are never logged.                                                                                                                                                                                                                                          |
+| **A10 Exceptional Conditions**    | A central error handler maps errors to safe messages (`{ statusCode, message }`) with no internals. Transactions roll back on any error, and the default is fail-closed: if an ownership or validation check throws, the request is denied. Timeouts and limits apply to DB queries, body size (1 MB, 5 MB for CSV), and CSV row count (10,000).                                                                                                                                                     |
 
 **Also part of secure coding:**
+
 - **Abuse protection:** per-user and per-IP rate limits on auth, review, practice, and import endpoints.
 - **Least privilege:** the app's DB role can't run DDL. Migrations run with a separate role in CI/deploy.
 - **CSV import:** check MIME type and extension, enforce UTF-8, never execute or eval content, and
@@ -229,14 +230,14 @@ stay visible above the mobile keyboard. axe checks run in Playwright.
 The main Claude session acts as the **orchestrator**. It reads an issue, calls the specialist agents
 (`.claude/agents/*.md`), and stops at decision points to ask Alina.
 
-| Agent | Role | Writes code? |
-| --- | --- | --- |
+| Agent       | Role                                                                                                            | Writes code?   |
+| ----------- | --------------------------------------------------------------------------------------------------------------- | -------------- |
 | `architect` | Turns an issue into a plan: files, schema changes, API contracts, tests, risks. Updates `docs/decisions/` ADRs. | No (docs only) |
-| `backend` | `server/**`, `shared/**`, Drizzle schema and migrations | Yes |
-| `frontend` | `app/**`: pages, components, composables, accessibility | Yes |
-| `tester` | Writes and runs Vitest/Playwright tests, reviews the diff for bugs and spec violations | Tests only |
-| `security` | Reviews every diff against §8 (OWASP Top 10 / ASVS L2), runs audit tools, writes abuse-case tests | Tests only |
-| `docs` | README, CLAUDE.md, API docs, `docs/` after each feature | Docs only |
+| `backend`   | `server/**`, `shared/**`, Drizzle schema and migrations                                                         | Yes            |
+| `frontend`  | `app/**`: pages, components, composables, accessibility                                                         | Yes            |
+| `tester`    | Writes and runs Vitest/Playwright tests, reviews the diff for bugs and spec violations                          | Tests only     |
+| `security`  | Reviews every diff against §8 (OWASP Top 10 / ASVS L2), runs audit tools, writes abuse-case tests               | Tests only     |
+| `docs`      | README, CLAUDE.md, API docs, `docs/` after each feature                                                         | Docs only      |
 
 **Flow per issue:**
 
@@ -266,22 +267,22 @@ issue LEX-xxx
 
 ## 11. Quality gates
 
-| Gate | When |
-| --- | --- |
-| Prettier + ESLint `--fix` on the edited file | Claude Code `PostToolUse` hook, after every edit |
-| `vue-tsc` typecheck + unit tests | Before an agent reports a task done, and in CI |
-| Integration tests (Postgres in Docker) | CI + locally for `server/**` changes |
-| Playwright E2E + responsive (mobile/desktop) + axe | CI on PRs touching `app/**` |
-| Mandatory test suites from spec §15 | Normalization, FSRS, review persistence, SRS/practice separation, CSV import |
+| Gate                                               | When                                                                         |
+| -------------------------------------------------- | ---------------------------------------------------------------------------- |
+| Prettier + ESLint `--fix` on the edited file       | Claude Code `PostToolUse` hook, after every edit                             |
+| `vue-tsc` typecheck + unit tests                   | Before an agent reports a task done, and in CI                               |
+| Integration tests (Postgres in Docker)             | CI + locally for `server/**` changes                                         |
+| Playwright E2E + responsive (mobile/desktop) + axe | CI on PRs touching `app/**`                                                  |
+| Mandatory test suites from spec §15                | Normalization, FSRS, review persistence, SRS/practice separation, CSV import |
 
 ## 12. Decisions log
 
-| # | Question | Decision (2026-11-08) |
-| --- | --- | --- |
-| 1 | UI library | **Nuxt UI v4** |
-| 2 | Hosting | **Open.** Options: Vercel + Neon, or Fly.io / Railway. Needed before LEX-017. |
-| 3 | Languages | ISO 639-1 codes with an allow-list. **`fr` and `en`** at launch. |
-| 4 | CSV limits | **5 MB / 10,000 rows** |
-| 5 | Email verification and password reset | **Not in MVP** (accepted risk, §8) |
-| 6 | GitHub issues | **Yes:** create LEX-001 → LEX-018 with 6 milestones |
-| 7 | Security baseline | **OWASP Top 10 (2025) + ASVS L2**, enforced in review and CI (§8) |
+| #   | Question                              | Decision (2026-11-08)                                                         |
+| --- | ------------------------------------- | ----------------------------------------------------------------------------- |
+| 1   | UI library                            | **Nuxt UI v4**                                                                |
+| 2   | Hosting                               | **Open.** Options: Vercel + Neon, or Fly.io / Railway. Needed before LEX-017. |
+| 3   | Languages                             | ISO 639-1 codes with an allow-list. **`fr` and `en`** at launch.              |
+| 4   | CSV limits                            | **5 MB / 10,000 rows**                                                        |
+| 5   | Email verification and password reset | **Not in MVP** (accepted risk, §8)                                            |
+| 6   | GitHub issues                         | **Yes:** create LEX-001 → LEX-018 with 6 milestones                           |
+| 7   | Security baseline                     | **OWASP Top 10 (2025) + ASVS L2**, enforced in review and CI (§8)             |

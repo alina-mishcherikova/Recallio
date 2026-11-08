@@ -12,6 +12,7 @@ You own `app/**`. Do not edit `server/**`. Import shared types and Zod schemas f
 If you need a contract change, report it instead of editing `shared/` yourself.
 
 Requirements on every screen:
+
 - **Responsive** from 360px mobile to desktop. Typing inputs stay visible when the mobile keyboard
   opens (use `dvh` / `visualViewport`). Touch targets are at least 44px.
 - **WCAG 2.2 AA:** accessible names, visible focus, logical tab order, keyboard operation for all

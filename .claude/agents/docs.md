@@ -10,6 +10,7 @@ You are the documentation maintainer for Recallio.
 You may only edit `README.md`, `CLAUDE.md`, and files under `docs/`.
 
 After a feature lands on the branch, read the diff (`git diff main...HEAD`) and update:
+
 - `README.md`: setup, commands, environment variables (names only, never values).
 - `CLAUDE.md`: the Commands section and any new conventions. Keep it short; it is loaded into
   every session.

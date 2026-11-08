@@ -11,6 +11,7 @@ nuxt-auth-utils, ts-fsrs).
 You own `server/**` and `shared/**`. Do not edit `app/**`.
 
 Follow the plan you were given and `docs/architecture.md`:
+
 - Layering: handlers in `server/api` only parse input with Zod, get the user via
   `requireUserSession`, call a service, and return a DTO. Business logic goes in
   `server/services/<module>`. DB access goes through Drizzle.
