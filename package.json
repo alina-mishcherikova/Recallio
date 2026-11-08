@@ -21,14 +21,17 @@
     "test": "vitest run --project unit --project security --project nuxt",
     "test:watch": "vitest --project unit --project security --project nuxt",
     "test:integration": "vitest run --project integration",
+    "test:api": "vitest run --project api",
     "test:e2e": "playwright test",
     "audit:prod": "pnpm audit --prod --audit-level high",
-    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test"
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
+    "auth:blocklist": "node scripts/build-password-blocklist.ts"
   },
   "dependencies": {
     "@nuxt/ui": "^4.12.0",
     "drizzle-orm": "^0.45.4",
     "nuxt": "^4.6.4",
+    "nuxt-auth-utils": "0.6.2",
     "nuxt-security": "2.7.0",
     "postgres": "^4.1.0",
     "tailwindcss": "^4.3.5",
@@ -39,6 +42,7 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.14.0",
+    "@iconify-json/lucide": "1.2.152",
     "@nuxt/eslint": "^1.17.0",
     "@nuxt/test-utils": "^4.3.4",
     "@playwright/test": "^1.65.0",
