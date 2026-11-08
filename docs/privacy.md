@@ -14,10 +14,32 @@ What personal data Recallio stores, why, and for how long. The schema is in
 | Review history           | `srs_cards`, `srs_review_logs`: schedule, rating, time, card state before and after                    | Spaced repetition scheduling and statistics                        |
 | Practice history         | `practice_attempts`: the answer you typed or chose, the expected answer, result, time                  | Practice feedback and statistics (kept apart from review history)  |
 | Answer edits and flags   | `answer_change_log`, `answer_flags`: what an accepted answer was before and after, answers you flagged | Show the edit history; let you approve answers                     |
+| Sessions                 | `user_sessions`: session id, user id, created, last seen, and expiry times                             | Keep you logged in; let logout and timeouts work                   |
 
 Nothing else is stored in the database: no name, no tracking, no data from third parties. The
-session is a sealed cookie; it holds the user id and no learning data. Learning content is free text
+session cookie is sealed and holds the user id and a session id, and no learning data. Session rows store no IP address and no user agent. Learning content is free text
 that you type, so don't enter personal data there.
+
+## Sessions
+
+A session row lives until you log out, it reaches 30 days after login (absolute), or it is unused for
+7 days (idle). An hourly job deletes expired rows, and logging in prunes your own. At most 10 sessions
+per user are kept. Deleting the account removes all of them.
+
+## Logs
+
+Security events (register, login, logout, rate limits, denied access, server errors) are written to the
+application log as JSON. They contain the client **IP address in clear**, a request id, the user id when
+known, and a reason code. Emails appear only as a short keyed hash (16 hex characters), never in clear.
+Passwords, cookies, session ids, and request bodies are never logged. Log retention depends on the hosting
+provider and is still to be decided (LEX-017). Logs are not removed when you delete your account.
+Rate-limit counters (keyed by IP or email hash) are kept in memory only, for at most 24 hours.
+
+## Password blocklist
+
+New passwords are checked against a list of common passwords shipped with the app
+(`server/assets/password-blocklist.txt`). It comes from public datasets, contains no user data, and
+nothing about your password is sent to a third party.
 
 ## Retention
 

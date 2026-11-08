@@ -31,34 +31,41 @@ export the variables first: `set -a; . ./.env; set +a`.
 
 ## Commands
 
-| Command                             | What it does                                                                              |
-| ----------------------------------- | ----------------------------------------------------------------------------------------- |
-| `pnpm dev`                          | Dev server with HMR                                                                       |
-| `pnpm build` / `pnpm preview`       | Production build / preview it                                                             |
-| `pnpm db:up` / `pnpm db:down`       | Start / stop local PostgreSQL                                                             |
-| `pnpm db:generate`                  | Generate a migration from `server/db/schema` changes                                      |
-| `pnpm db:migrate`                   | Apply migrations                                                                          |
-| `pnpm db:reset`                     | Delete the local DB volume, start PostgreSQL, and re-apply migrations (**deletes data**)  |
-| `pnpm db:studio`                    | Drizzle Studio (browse the local DB)                                                      |
-| `pnpm lint` / `pnpm lint:fix`       | ESLint (Nuxt + security rules)                                                            |
-| `pnpm format` / `pnpm format:check` | Prettier                                                                                  |
-| `pnpm typecheck`                    | `vue-tsc` via `nuxt typecheck`                                                            |
-| `pnpm test`                         | Vitest: `unit` (Node) and `nuxt` (Nuxt runtime) projects                                  |
-| `pnpm test:integration`             | Vitest integration project against real PostgreSQL (needs Docker via `pnpm db:up`)        |
-| `pnpm test:e2e`                     | Playwright on desktop and mobile, with axe accessibility checks (builds the app first)    |
-| `pnpm audit:prod`                   | Dependency audit; fails on high or critical findings                                      |
-| `pnpm check`                        | format check + lint + typecheck + unit tests (no integration tests; run those separately) |
+| Command                             | What it does                                                                                                             |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `pnpm dev`                          | Dev server with HMR                                                                                                      |
+| `pnpm build` / `pnpm preview`       | Production build / preview it                                                                                            |
+| `pnpm db:up` / `pnpm db:down`       | Start / stop local PostgreSQL                                                                                            |
+| `pnpm db:generate`                  | Generate a migration from `server/db/schema` changes                                                                     |
+| `pnpm db:migrate`                   | Apply migrations                                                                                                         |
+| `pnpm db:reset`                     | Delete the local DB volume, start PostgreSQL, and re-apply migrations (**deletes data**)                                 |
+| `pnpm db:studio`                    | Drizzle Studio (browse the local DB)                                                                                     |
+| `pnpm lint` / `pnpm lint:fix`       | ESLint (Nuxt + security rules)                                                                                           |
+| `pnpm format` / `pnpm format:check` | Prettier                                                                                                                 |
+| `pnpm typecheck`                    | `vue-tsc` via `nuxt typecheck`                                                                                           |
+| `pnpm test`                         | Vitest: `unit` (Node) and `nuxt` (Nuxt runtime) projects                                                                 |
+| `pnpm test:integration`             | Vitest integration project against real PostgreSQL (needs Docker via `pnpm db:up`)                                       |
+| `pnpm test:api`                     | Black-box API tests against the built server and `recallio_test` (needs Docker and a build)                              |
+| `pnpm test:e2e`                     | Playwright on desktop and mobile, with axe accessibility checks (builds the app first; `E2E_REBUILD=1` forces a rebuild) |
+| `pnpm auth:blocklist`               | Regenerate `server/assets/password-blocklist.txt` from the pinned upstream lists                                         |
+| `pnpm audit:prod`                   | Dependency audit; fails on high or critical findings                                                                     |
+| `pnpm check`                        | format check + lint + typecheck + unit tests (no integration tests; run those separately)                                |
 
 ## Environment variables
 
-| Name                                                                    | Purpose                                                                                                                                                                    |
-| ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `NUXT_DATABASE_URL`                                                     | Runtime connection, as the DML-only app role. A built server refuses to start with a role that can run DDL. A non-local DB **must** use exactly one `sslmode=verify-full`. |
-| `DATABASE_MIGRATOR_URL`                                                 | Migrations only (drizzle-kit). Migrator role; never read by the server.                                                                                                    |
-| `TEST_DATABASE_URL` / `TEST_DATABASE_MIGRATOR_URL`                      | Integration tests. The database name must end in `_test`: it is wiped on every run.                                                                                        |
-| `RECALLIO_MIGRATOR_PASSWORD` / `RECALLIO_APP_PASSWORD`                  | Passwords for the two DB roles, set when the local Docker database is first created                                                                                        |
-| `NUXT_TRUSTED_IP_HEADER`                                                | Optional. Client-IP header set by your reverse proxy (e.g. `fly-client-ip`). Only set it if the proxy always overwrites that header.                                       |
-| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` / `POSTGRES_PORT` | Local Docker database only                                                                                                                                                 |
+| Name                                                                    | Purpose                                                                                                                                                                                                |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `NUXT_DATABASE_URL`                                                     | Runtime connection, as the DML-only app role. A built server refuses to start with a role that can run DDL. A non-local DB **must** use exactly one `sslmode=verify-full`.                             |
+| `DATABASE_MIGRATOR_URL`                                                 | Migrations only (drizzle-kit). Migrator role; never read by the server.                                                                                                                                |
+| `TEST_DATABASE_URL` / `TEST_DATABASE_MIGRATOR_URL`                      | Integration tests. The database name must end in `_test`: it is wiped on every run.                                                                                                                    |
+| `RECALLIO_MIGRATOR_PASSWORD` / `RECALLIO_APP_PASSWORD`                  | Passwords for the two DB roles, set when the local Docker database is first created                                                                                                                    |
+| `NUXT_APP_SECRET`                                                       | Seals the session cookie and keys the audit and rate-limit hashes. At least 32 characters (`openssl rand -base64 32`). Optional in `pnpm dev` (generated); a built server refuses to start without it. |
+| `NUXT_APP_ORIGIN`                                                       | Public origin of the app, used by the CSRF origin check. `https://` in production; `http://` only for localhost. Default `http://localhost:3000`.                                                      |
+| `NUXT_TRUSTED_IP_HEADER`                                                | Optional. Client-IP header set by your reverse proxy (e.g. `fly-client-ip`). Only set it if the proxy always overwrites that header.                                                                   |
+| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` / `POSTGRES_PORT` | Local Docker database only                                                                                                                                                                             |
+
+If the dev server runs on a port other than 3000, set `NUXT_APP_ORIGIN` to match (for example
+`http://localhost:3001`). Otherwise every POST fails the origin check with 403.
 
 The server validates its configuration at startup and refuses to start if it's invalid. Every built
 server (`pnpm build`) applies the production rules, whatever `NODE_ENV` says. Only `pnpm dev` is relaxed.
@@ -76,4 +83,4 @@ docs/       Specification, architecture, decisions
 
 ## Known limitations (MVP)
 
-- There is no email verification or password reset, so a forgotten password can't be recovered.
+- There is no email verification or password reset, so a forgotten password can't be recovered. Password change and reset are planned for a later release.
