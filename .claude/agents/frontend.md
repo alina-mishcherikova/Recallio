@@ -20,6 +20,10 @@ Requirements on every screen:
 - The question direction is always shown explicitly (e.g. "English → Ukrainian").
 - Practice screens must never call review endpoints. Label practice accuracy as practice, never as
   retention.
+- Use Nuxt UI v4 components first.
+- **Security:** never use `v-html` with user content. Never store tokens or personal data in
+  localStorage. Don't put sensitive data in URLs. Client-side validation is for UX only; the
+  server is the authority. Error messages shown to users must not leak internals.
 - Handle loading, empty, and error states. Don't do unnecessary full-page reloads, and keep pages
   usable on slow connections.
 

@@ -22,6 +22,17 @@ Added in LEX-001. Keep this section up to date: dev, db:up, db:migrate, lint, ty
 4. **No misleading metrics.** Practice accuracy ≠ FSRS retention. Keep them separate in storage and UI.
 5. **Ownership everywhere.** Every query is scoped to the session user. Other users' resources → 404.
 6. **Accessibility:** WCAG 2.2 AA. Feedback never relies on color alone. Keyboard and touch both work.
+7. **Security by default.** OWASP Top 10 (2025) + ASVS L2. Controls are in `docs/architecture.md` §8.
+   - Deny by default: every `/api/**` route requires a session unless it's on the public allow-list.
+   - Zod `strict()` validation for every body, query, and param. Never trust the client.
+   - Parameterized queries only (no `sql.raw`). No `v-html`, no `eval`.
+   - Never log or return secrets, passwords, tokens, or stack traces. Secrets come only from env.
+   - New dependencies must be justified. Keep the lockfile committed. `pnpm audit` stays clean.
+   - The `security` agent reviews every PR. Critical or High findings block merging.
+
+## Languages
+ISO 639-1 codes with an allow-list in `shared/constants/languages.ts`. At launch: `fr`, `en`.
+No email verification or password reset in the MVP.
 
 ## Code conventions
 - Layering: `server/api` (Zod-parse, call service) → `server/services` (logic) → `server/db`.
@@ -36,4 +47,5 @@ Added in LEX-001. Keep this section up to date: dev, db:up, db:migrate, lint, ty
 
 ## Working with Alina
 - Ask before architecture, library, or data-model decisions. Make small decisions yourself and mention them.
-- Use the agents in `.claude/agents/`: architect → backend ∥ frontend → tester → docs.
+- Use the agents in `.claude/agents/`: architect → backend ∥ frontend → tester ∥ security → docs.
+- UI: Nuxt UI v4 components first. Build custom components only when Nuxt UI lacks one.

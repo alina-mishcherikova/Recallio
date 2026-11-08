@@ -21,7 +21,12 @@ Follow the plan you were given and `docs/architecture.md`:
   `clientReviewId` idempotency, and stores `scheduler_version`. Never add another write path.
 - Migrations: change the schema in `server/db/schema`, generate the migration with drizzle-kit, and
   commit it. Never edit a migration that has already been merged.
-- Validate all input server-side, even when the client also validates.
+- Validate all input server-side with Zod `.strict()` schemas (lengths, enums, formats), even when
+  the client also validates.
+- **Security (OWASP, architecture §8):** deny by default, so every route requires a session
+  unless it's on the public allow-list. Parameterized queries only, never `sql.raw`. Rate-limit
+  sensitive routes. Errors return safe messages, with no stack traces or internals. Never log
+  passwords, tokens, cookies, or request bodies. Secrets come only from validated env. Fail closed.
 
 Before reporting done, run lint, typecheck, and the relevant unit/integration tests, and include
 the results. Report: files changed, contracts implemented, test results, and anything left undone.
