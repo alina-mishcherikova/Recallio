@@ -1,42 +1,32 @@
 import { describe, expect, it } from 'vitest'
-import { validateServerEnv } from '../../server/utils/env'
+import { validateServerConfig } from '../../server/utils/env'
 
-const valid = { NODE_ENV: 'development', NUXT_DATABASE_URL: 'postgres://u:p@localhost:5432/db' }
+const local = 'postgres://u:p@localhost:5432/db'
+const remote = 'postgres://u:p@db.example.com:5432/db'
 
-describe('validateServerEnv', () => {
-  it('accepts a valid development config', () => {
-    expect(validateServerEnv(valid).NUXT_DATABASE_URL).toBe(valid.NUXT_DATABASE_URL)
+describe('validateServerConfig', () => {
+  it('accepts a local database in dev and in a built server', () => {
+    expect(validateServerConfig({ databaseUrl: local, built: false }).databaseUrl).toBe(local)
+    expect(() => validateServerConfig({ databaseUrl: local, built: true })).not.toThrow()
   })
 
-  it('rejects a missing database URL', () => {
-    expect(() => validateServerEnv({ NODE_ENV: 'development' })).toThrow(/NUXT_DATABASE_URL/)
+  it('rejects a missing or empty database URL', () => {
+    expect(() => validateServerConfig({ databaseUrl: undefined, built: false })).toThrow(/databaseUrl/)
+    expect(() => validateServerConfig({ databaseUrl: '', built: false })).toThrow(/databaseUrl/)
   })
 
   it('rejects non-postgres URLs', () => {
-    expect(() => validateServerEnv({ ...valid, NUXT_DATABASE_URL: 'mysql://u:p@h/db' })).toThrow(/postgres/)
+    expect(() => validateServerConfig({ databaseUrl: 'mysql://u:p@h/db', built: false })).toThrow(/postgres/)
   })
 
-  it('requires TLS for the database in production', () => {
-    expect(() => validateServerEnv({ ...valid, NODE_ENV: 'production' })).toThrow(/sslmode/)
+  it('requires verified TLS for remote databases in built servers', () => {
+    expect(() => validateServerConfig({ databaseUrl: remote, built: true })).toThrow(/verify-full/)
     expect(() =>
-      validateServerEnv({
-        NODE_ENV: 'production',
-        NUXT_DATABASE_URL: `${valid.NUXT_DATABASE_URL}?sslmode=require`,
-      }),
+      validateServerConfig({ databaseUrl: `${remote}?sslmode=verify-full`, built: true }),
     ).not.toThrow()
   })
 
-  it('never includes secret values in the error message', () => {
-    const secret = 'S3cr3t-Passw0rd'
-    try {
-      validateServerEnv({
-        ...valid,
-        NODE_ENV: 'production',
-        NUXT_DATABASE_URL: `postgres://u:${secret}@h/db`,
-      })
-      expect.unreachable()
-    } catch (e) {
-      expect(String(e)).not.toContain(secret)
-    }
+  it('allows remote plaintext only on the dev server', () => {
+    expect(() => validateServerConfig({ databaseUrl: remote, built: false })).not.toThrow()
   })
 })

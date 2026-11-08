@@ -1,8 +1,9 @@
-// Runs first (00.*): refuse to boot with invalid configuration.
-// Built servers default to production rules when NODE_ENV is unset (fail closed).
+// Runs first (00.*): refuse to boot with invalid configuration (fail closed).
+// Validates the *effective* runtime config (NUXT_* or NITRO_* overrides), not a single env var.
+// Production rules apply to every built server, regardless of NODE_ENV.
 export default defineNitroPlugin(() => {
-  // Copy first: the bundler statically replaces `process.env.NODE_ENV`, but not lookups on a copy.
-  const env: Record<string, string | undefined> = { ...process.env }
-  env.NODE_ENV ??= import.meta.dev ? 'development' : 'production'
-  validateServerEnv(env)
+  validateServerConfig({
+    databaseUrl: useRuntimeConfig().databaseUrl,
+    built: !import.meta.dev,
+  })
 })
