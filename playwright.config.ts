@@ -14,11 +14,13 @@ export default defineConfig({
   },
   // Spec US-UI-01: every journey runs on desktop and mobile.
   projects: [
-    { name: 'desktop', use: { ...devices['Desktop Chrome'] } },
-    { name: 'mobile', use: { ...devices['Pixel 7'] } },
+    { name: 'desktop', use: { ...devices['Desktop Chrome'] }, testIgnore: /rate-limit\.spec\.ts/ },
+    { name: 'mobile', use: { ...devices['Pixel 7'] }, testIgnore: /(security|rate-limit)\.spec\.ts/ },
+    // Drains the rate-limit bucket, so it runs after everything else.
+    { name: 'rate-limit', testMatch: /rate-limit\.spec\.ts/, dependencies: ['desktop', 'mobile'] },
   ],
   webServer: {
-    command: `pnpm build && NODE_ENV=test PORT=${port} node .output/server/index.mjs`,
+    command: `pnpm build && PORT=${port} node .output/server/index.mjs`,
     url: `http://localhost:${port}`,
     reuseExistingServer: !process.env.CI,
     timeout: 180_000,

@@ -12,6 +12,14 @@ export default defineConfig({
           environment: 'node',
         },
       },
+      {
+        // Security regression tests for pure server logic (OWASP abuse cases).
+        test: {
+          name: 'security',
+          include: ['tests/security/**/*.test.ts'],
+          environment: 'node',
+        },
+      },
       // Components and composables that need the Nuxt runtime.
       await defineVitestProject({
         test: {
