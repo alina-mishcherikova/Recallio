@@ -45,13 +45,14 @@ export the variables first: `set -a; . ./.env; set +a`.
 
 ## Environment variables
 
-| Name                                                                    | Purpose                                                                                    |
-| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `NUXT_DATABASE_URL`                                                     | PostgreSQL connection string. Production **must** include `sslmode=require` (or stricter). |
-| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` / `POSTGRES_PORT` | Local Docker database only                                                                 |
+| Name                                                                    | Purpose                                                                                                                              |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `NUXT_DATABASE_URL`                                                     | PostgreSQL connection string. A built server connecting to a non-local DB **must** use exactly one `sslmode=verify-full`.            |
+| `NUXT_TRUSTED_IP_HEADER`                                                | Optional. Client-IP header set by your reverse proxy (e.g. `fly-client-ip`). Only set it if the proxy always overwrites that header. |
+| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` / `POSTGRES_PORT` | Local Docker database only                                                                                                           |
 
-The server validates its environment at startup and refuses to start if it's invalid. A built server
-with no `NODE_ENV` set applies production rules.
+The server validates its configuration at startup and refuses to start if it's invalid. Every built
+server (`pnpm build`) applies the production rules, whatever `NODE_ENV` says. Only `pnpm dev` is relaxed.
 
 ## Project layout
 
