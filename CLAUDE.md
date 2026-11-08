@@ -15,7 +15,9 @@ nuxt-auth-utils · ts-fsrs v6 (exact version pinned) · Vitest + Playwright · N
 
 - `pnpm dev` · `pnpm build`
 - `pnpm db:up` (Docker Postgres) · `pnpm db:generate` · `pnpm db:migrate`
-- `pnpm lint` · `pnpm format` · `pnpm typecheck` · `pnpm test` (Vitest: `unit` + `nuxt`) · `pnpm test:e2e`
+- `pnpm lint` · `pnpm format` · `pnpm typecheck` · `pnpm test` (Vitest: `unit` + `security` + `nuxt`) · `pnpm test:e2e`
+- `pnpm test:integration` and `pnpm test:api` (built server) need Postgres (`db:up`); `E2E_REBUILD=1` forces an e2e rebuild.
+- `pnpm auth:blocklist` regenerates the password blocklist.
 - `pnpm check` runs format check, lint, typecheck, and unit tests. Run it before reporting work as done.
 - `pnpm audit:prod` must stay free of high/critical findings.
 - `pnpm test:e2e` needs `.env` exported first: `set -a; . ./.env; set +a`.
@@ -39,7 +41,10 @@ nuxt-auth-utils · ts-fsrs v6 (exact version pinned) · Vitest + Playwright · N
    that isn't backed by a matching `srs_review_logs` row; there is no reset path (ADR 0001 §3).
 9. **Security by default.** OWASP Top 10 (2025) + ASVS L2. Controls are in `docs/architecture.md` §8.
    - Deny by default: every `/api/**` route requires a session unless it's on the public allow-list.
+     Every new `/api` handler must call `requireAuth(event)` (a unit test enforces it) unless it is in
+     `server/utils/public-routes.ts`. Owned resources go through `requireOwner`.
    - Zod `strict()` validation for every body, query, and param. Never trust the client.
+     Import `z` from `#shared/zod`, never from `zod`.
    - Parameterized queries only (no `sql.raw`). No `v-html`, no `eval`.
    - Never log or return secrets, passwords, tokens, or stack traces. Secrets come only from env.
    - New dependencies must be justified. Keep the lockfile committed. `pnpm audit` stays clean.

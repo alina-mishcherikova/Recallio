@@ -34,6 +34,21 @@ export default defineConfig({
           hookTimeout: 60_000,
         },
       },
+      {
+        // API black-box tests (ADR 0002 §8.3, D9). Needs `pnpm db:up`; not part of `pnpm test`: run
+        // `pnpm test:api`. The global setup migrates recallio_test under the integration run lock,
+        // builds if needed, and starts the built server once. Files share that server, so they run
+        // serially (the enumeration timing test also needs a quiet server).
+        test: {
+          name: 'api',
+          include: ['tests/api/**/*.test.ts'],
+          environment: 'node',
+          globalSetup: ['tests/api/global-setup.ts'],
+          fileParallelism: false,
+          testTimeout: 60_000,
+          hookTimeout: 300_000,
+        },
+      },
       // Components and composables that need the Nuxt runtime.
       await defineVitestProject({
         test: {

@@ -1,4 +1,4 @@
-import { z } from 'zod'
+import { z } from '../zod'
 import {
   ANSWER_CHANGE_ACTIONS,
   APPROVAL_STATUSES,

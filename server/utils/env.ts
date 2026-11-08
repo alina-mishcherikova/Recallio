@@ -1,4 +1,4 @@
-import { z } from 'zod'
+import { z } from '../../shared/zod'
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1'])
 
@@ -65,6 +65,83 @@ export const migrationConfigSchema = z
 
 export type MigrationConfig = z.infer<typeof migrationConfigSchema>
 
+/** Absolute session lifetime (ADR 0002 §4.2). The cookie and the iron TTL may never exceed it. */
+export const SESSION_ABSOLUTE_SECONDS = 60 * 60 * 24 * 30
+export const SESSION_COOKIE_NAME = '__Host-recallio-session'
+/** Used when NUXT_APP_ORIGIN is unset on the dev server. Built servers must set it. */
+export const DEV_APP_ORIGIN = 'http://localhost:3000'
+const APP_SECRET_MIN = 32
+
+/**
+ * `https://host[:port]` with nothing after it (no path, query, fragment, credentials, or trailing
+ * slash). `http://` only for loopback hosts, so local E2E and API tests work. Never echoes the value.
+ */
+export function appOriginProblem(value: string): string | null {
+  if (!URL.canParse(value)) return 'must be an origin like https://recallio.app'
+  const url = new URL(value)
+  if (url.origin !== value) return 'must be an origin only (no path, query, fragment, or trailing slash)'
+  if (url.protocol === 'https:') return null
+  if (url.protocol === 'http:' && LOOPBACK_HOSTS.has(url.hostname)) return null
+  return 'must use https:// (http:// is allowed only for localhost)'
+}
+
+/**
+ * Auth configuration (ADR 0002 §2.5, OWASP A02/A04/A07). Validated at boot next to
+ * `serverConfigSchema`. Built servers fail closed; the dev server generates `appSecret` itself.
+ */
+export const authConfigSchema = z
+  .object({
+    appSecret: z.unknown(),
+    appOrigin: z.unknown(),
+    sessionName: z.unknown(),
+    sessionMaxAge: z.unknown(),
+    sessionCookieSecure: z.unknown(),
+    /** True when NUXT_SESSION_PASSWORD (or runtimeConfig.session.password) is set. */
+    sessionPasswordSet: z.boolean(),
+    built: z.boolean(),
+  })
+  .strict()
+  .superRefine((cfg, ctx) => {
+    if (!cfg.built) return
+    const fail = (path: string, message: string) => ctx.addIssue({ code: 'custom', path: [path], message })
+
+    if (typeof cfg.appSecret !== 'string' || cfg.appSecret.length < APP_SECRET_MIN) {
+      fail('appSecret', `NUXT_APP_SECRET must be a string of at least ${APP_SECRET_MIN} characters`)
+    } else if (/^change-me/i.test(cfg.appSecret) || /^(.)\1+$/.test(cfg.appSecret)) {
+      fail('appSecret', 'NUXT_APP_SECRET is a placeholder; generate one with `openssl rand -base64 32`')
+    }
+
+    if (typeof cfg.appOrigin !== 'string' || cfg.appOrigin === '') {
+      fail('appOrigin', 'NUXT_APP_ORIGIN is required in built servers')
+    } else {
+      const problem = appOriginProblem(cfg.appOrigin)
+      if (problem) fail('appOrigin', `NUXT_APP_ORIGIN ${problem}`)
+    }
+
+    if (cfg.sessionCookieSecure === false || cfg.sessionCookieSecure === 'false') {
+      fail('sessionCookieSecure', 'the session cookie must be Secure in built servers')
+    }
+    if (typeof cfg.sessionName !== 'string' || !cfg.sessionName.startsWith('__Host-')) {
+      fail('sessionName', 'the session cookie name must start with __Host-')
+    }
+    if (
+      typeof cfg.sessionMaxAge !== 'number' ||
+      !Number.isInteger(cfg.sessionMaxAge) ||
+      cfg.sessionMaxAge <= 0 ||
+      cfg.sessionMaxAge > SESSION_ABSOLUTE_SECONDS
+    ) {
+      fail('sessionMaxAge', `the session maxAge must be between 1 and ${SESSION_ABSOLUTE_SECONDS} seconds`)
+    }
+    if (cfg.sessionPasswordSet) {
+      fail(
+        'sessionPassword',
+        'NUXT_SESSION_PASSWORD is not used by nuxt-auth-utils 0.6; set NUXT_APP_SECRET and remove it',
+      )
+    }
+  })
+
+export type AuthConfigInput = z.input<typeof authConfigSchema>
+
 function parseOrThrow<T>(schema: z.ZodType<T>, input: unknown, label: string): T {
   let result: z.ZodSafeParseResult<T>
   try {
@@ -88,4 +165,9 @@ export function validateServerConfig(input: { databaseUrl: unknown; built: boole
 /** Throws with variable names and messages only — never their values. */
 export function validateMigrationConfig(input: { migratorUrl: unknown }): MigrationConfig {
   return parseOrThrow(migrationConfigSchema, input, 'migration configuration')
+}
+
+/** Throws with variable names and messages only — never their values. */
+export function validateAuthConfig(input: AuthConfigInput): void {
+  parseOrThrow(authConfigSchema, input, 'auth configuration')
 }

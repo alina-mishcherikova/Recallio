@@ -29,6 +29,7 @@ describe('migrations on an empty database', () => {
       'sentence_examples',
       'srs_cards',
       'srs_review_logs',
+      'user_sessions',
       'users',
       'vocabulary_entries',
       'vocabulary_meanings',
@@ -126,7 +127,7 @@ describe('migrations on an empty database', () => {
 
   it('is a no-op when run again', async () => {
     const before = await migrator`select id, hash from drizzle.__drizzle_migrations order by id`
-    expect(before).toHaveLength(5)
+    expect(before).toHaveLength(7)
     await migrate(drizzle(migrator), { migrationsFolder: MIGRATIONS_FOLDER })
     const after = await migrator`select id, hash from drizzle.__drizzle_migrations order by id`
     expect(after).toEqual(before)

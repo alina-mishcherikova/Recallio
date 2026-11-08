@@ -56,9 +56,10 @@ describe('content deletion', () => {
     const before = await countsByTable()
     await app`delete from collections where id = ${alice.collectionId}`
     const after = await countsByTable()
-    // Only bob's rows remain below collections; both users remain.
+    // Only bob's rows remain below collections; both users (and their sessions) remain.
+    const userLevel = new Set(['users', 'user_sessions'])
     for (const [table, n] of Object.entries(before)) {
-      expect(after[table], table).toBe(table === 'users' ? n : n / 2)
+      expect(after[table], table).toBe(userLevel.has(table) ? n : n / 2)
     }
   })
 

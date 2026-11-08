@@ -1,2 +1,59 @@
 @import 'tailwindcss';
 @import '@nuxt/ui';
+
+/*
+ * Accessible theme (WCAG 2.2 AA, 1.4.3 and 1.4.11). Nuxt UI sets these variables inside
+ * `@layer theme` with shade 500 (light) and 400 (dark), which fails 4.5:1 for text and for white
+ * text on buttons. Unlayered rules here win over the layer. Ratios are listed in app.config.ts.
+ */
+:root,
+.light {
+  --ui-primary: var(--ui-color-primary-700);
+  --ui-secondary: var(--ui-color-secondary-700);
+  --ui-success: var(--ui-color-success-700);
+  --ui-info: var(--ui-color-info-700);
+  --ui-warning: var(--ui-color-warning-700);
+  --ui-error: var(--ui-color-error-700);
+
+  --ui-text-dimmed: var(--ui-color-neutral-500);
+  --ui-text-muted: var(--ui-color-neutral-600);
+  --ui-text-toned: var(--ui-color-neutral-700);
+  --ui-text: var(--ui-color-neutral-800);
+  /* Input and control boundaries: 3:1 against the page (1.4.11). */
+  --ui-border-accented: var(--ui-color-neutral-500);
+}
+
+.dark {
+  --ui-primary: var(--ui-color-primary-300);
+  --ui-secondary: var(--ui-color-secondary-300);
+  --ui-success: var(--ui-color-success-300);
+  --ui-info: var(--ui-color-info-300);
+  --ui-warning: var(--ui-color-warning-300);
+  --ui-error: var(--ui-color-error-300);
+
+  --ui-text-dimmed: var(--ui-color-neutral-400);
+  --ui-text-muted: var(--ui-color-neutral-300);
+  --ui-text-toned: var(--ui-color-neutral-200);
+  --ui-text: var(--ui-color-neutral-100);
+  --ui-border-accented: var(--ui-color-neutral-400);
+}
+
+/*
+ * Visible focus (2.4.7, 1.4.11). Nuxt UI buttons use a 25 %-opacity outline, which is too faint.
+ * Inputs keep Nuxt UI's 2px primary ring.
+ */
+a:focus-visible,
+button:focus-visible,
+[role='button']:focus-visible {
+  outline: 2px solid var(--ui-primary);
+  outline-offset: 2px;
+}
+
+/* Keep focused fields clear of sticky edges and the on-screen keyboard (US-UI-01). */
+@layer base {
+  input,
+  select,
+  textarea {
+    scroll-margin-block: 6rem;
+  }
+}
