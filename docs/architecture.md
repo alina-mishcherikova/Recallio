@@ -239,7 +239,7 @@ stay visible above the mobile keyboard. axe checks run in Playwright.
 ## 9. Development workflow — agents
 
 The main Claude session acts as the **orchestrator**. It reads an issue, calls the specialist agents
-(`.claude/agents/*.md`), and stops at decision points to ask Alina.
+(`.claude/agents/*.md`), and stops only for big decisions (data model, libraries, hosting, scope) to ask Alina.
 
 | Agent       | Role                                                                                                            | Writes code?   |
 | ----------- | --------------------------------------------------------------------------------------------------------------- | -------------- |
@@ -259,7 +259,7 @@ issue LEX-xxx
   → backend ∥ frontend   (parallel when files don't overlap; contract = shared/schemas)
   → tester: tests + review  ∥  security: OWASP review   ──► fix loop until green
   → docs: update docs
-  → conventional commits → push → PR (Closes #n) → Alina reviews & merges
+  → conventional commits → push → PR (Closes #n) → checks + security green → Claude squash-merges
 ```
 
 ## 10. Git conventions
@@ -272,7 +272,7 @@ issue LEX-xxx
   `type(scope): summary`, with types `feat fix docs test refactor perf build ci chore style`. Scopes
   are module names (`auth`, `srs`, `practice`...). Footer: `Refs: LEX-004`. Use `!` /
   `BREAKING CHANGE:` when needed.
-- **PRs:** one issue per PR, merged into `main` only after CI passes and Alina approves. Use squash
+- **PRs:** one issue per PR, merged into `main` by Claude only after all checks and the security review pass (no PR approval step). Use squash
   merge so `main` history stays conventional.
 - Enforcement: a commitlint + branch-name check in CI (added in LEX-001).
 
