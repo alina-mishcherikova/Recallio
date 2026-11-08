@@ -36,7 +36,14 @@ const srsMessage =
   'SRS tables are accessed only in server/services/srs/** (writes only in review.service.ts). Call the SRS service instead.'
 const srsBoundary = {
   files: ['**/*.{ts,mts,cts,js,mjs,cjs,vue}'],
-  ignores: ['server/services/srs/**', 'server/db/**', 'tests/**', 'eslint.config.mjs'],
+  ignores: [
+    'server/services/srs/**',
+    'server/db/**',
+    'tests/**',
+    'eslint.config.mjs',
+    // Read-only catalog check (ADR 0001 D9): names srs_guard and the SRS tables in has_*_privilege().
+    'server/utils/db-privileges.ts',
+  ],
   rules: {
     'no-restricted-imports': [
       'error',
