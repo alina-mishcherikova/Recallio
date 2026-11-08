@@ -15,6 +15,27 @@
       "when": 1794168923149,
       "tag": "0001_tables",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794168923446,
+      "tag": "0002_srs_guard",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1794168923747,
+      "tag": "0003_integrity_triggers",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1794168924046,
+      "tag": "0004_app_role_grants",
+      "breakpoints": true
     }
   ]
 }
