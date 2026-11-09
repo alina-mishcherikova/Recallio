@@ -16,6 +16,7 @@ export type AuditEventName =
   | 'access.denied'
   | 'account.deleted'
   | 'account.delete.failure'
+  | 'collection.deleted'
   | 'server.error'
 
 export type AuditReason =
@@ -59,6 +60,7 @@ const LEVELS: Record<AuditEventName, 'info' | 'warn' | 'error'> = {
   'access.denied': 'warn',
   'account.deleted': 'info',
   'account.delete.failure': 'warn',
+  'collection.deleted': 'info',
   'server.error': 'error',
 }
 
