@@ -43,9 +43,15 @@ async function onLogout() {
       </div>
     </div>
 
-    <p>Your collections, reviews and practice will appear here.</p>
+    <p>Your reviews and practice will appear here.</p>
 
     <div class="flex flex-col gap-3 sm:flex-row">
+      <UButton
+        to="/collections"
+        size="lg"
+        label="Your collections"
+        class="min-h-11 min-w-11 justify-center"
+      />
       <UButton
         to="/account"
         color="neutral"

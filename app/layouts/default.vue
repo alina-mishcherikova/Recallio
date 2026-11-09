@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// Minimal app shell until full navigation lands (LEX-015): skip link, home link, and the two
+// Minimal app shell until full navigation lands (LEX-015): skip link, home link, and the
 // signed-in destinations.
 const { loggedIn } = useUserSession()
 useKeepFocusedFieldVisible()
@@ -22,13 +22,22 @@ useKeepFocusedFieldVisible()
           Recallio
         </NuxtLink>
         <nav v-if="loggedIn" aria-label="Main">
-          <ul class="flex items-center gap-1">
+          <ul class="flex flex-wrap items-center gap-1">
             <li>
               <UButton
                 to="/dashboard"
                 variant="ghost"
                 color="neutral"
                 label="Dashboard"
+                class="min-h-11 min-w-11"
+              />
+            </li>
+            <li>
+              <UButton
+                to="/collections"
+                variant="ghost"
+                color="neutral"
+                label="Collections"
                 class="min-h-11 min-w-11"
               />
             </li>
