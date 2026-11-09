@@ -125,12 +125,11 @@ export default defineNuxtConfig({
   },
 
   routeRules: {
-    '/api/**': { headers: { 'cache-control': 'no-store' } },
-    // Passwords may contain any characters (NIST 800-63B), including `<script>`: nuxt-security's XSS
-    // validator would reject them with a 400. These routes never echo or render input (JSON only).
-    '/api/auth/register': { security: { xssValidator: false } },
-    '/api/auth/login': { security: { xssValidator: false } },
-    '/api/account': { security: { xssValidator: false } },
+    // nuxt-security's XSS validator is off for the JSON API. It only inspected GET/POST, rejected
+    // legitimate text (passwords per NIST 800-63B, "a < b", "<3 French") with an unexplained 400, and
+    // never ran on PATCH. XSS is prevented where it matters: strict Zod schemas on input, Vue's output
+    // escaping, the v-html/innerHTML lint bans and the nonce-only CSP (LEX-004 security review, L1).
+    '/api/**': { headers: { 'cache-control': 'no-store' }, security: { xssValidator: false } },
   },
 
   nitro: {
@@ -189,7 +188,8 @@ export default defineNuxtConfig({
     },
     rateLimiter: {
       tokensPerInterval: 150,
-      interval: 300_000, // per route, per trusted client IP (server/plugins/01.client-ip.ts).
+      interval: 300_000, // one bucket per trusted client IP (/64 for IPv6) per matched route rule,
+      // shared by the whole app. Per-user write limits: follow-up in LEX-017 (LEX-004 review, L3).
       // In-memory per process: switch to a shared driver before running >1 instance. Per-account
       // auth limits: server/services/auth/rate-limit.ts.
     },
