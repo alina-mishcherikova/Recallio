@@ -10,7 +10,6 @@ const PASSWORD_ID = 'delete-account-password'
 const { logout, deleteAccount, handleUnauthorized } = useAuth()
 const { data: user, status: profileStatus, refresh } = useProfile()
 
-const languageNames = new Intl.DisplayNames(['en'], { type: 'language' })
 const memberSince = computed(() =>
   user.value
     ? new Intl.DateTimeFormat('en', { dateStyle: 'long' }).format(new Date(user.value.createdAt))
@@ -129,7 +128,7 @@ function onCloseAutoFocus(event: Event) {
         <dt class="font-medium">Email</dt>
         <dd class="break-all text-muted">{{ user.email }}</dd>
         <dt class="font-medium">Native language</dt>
-        <dd class="text-muted">{{ languageNames.of(user.nativeLanguage) ?? user.nativeLanguage }}</dd>
+        <dd class="text-muted">{{ languageLabel(user.nativeLanguage) }}</dd>
         <dt class="font-medium">Time zone</dt>
         <dd class="text-muted">{{ user.timezone }}</dd>
         <dt class="font-medium">Daily limits</dt>

@@ -251,6 +251,18 @@ reads, and labels practice accuracy and FSRS retention as different metrics.
   by default. Behind a proxy, set `NUXT_TRUSTED_IP_HEADER` to the header the proxy overwrites.
   Client-sent `X-Forwarded-For` is never trusted. The limiter store is in-memory per process, so it
   must move to a shared store (e.g. Redis) before running more than one instance (LEX-017).
+  The global nuxt-security limiter is one bucket per client IP (/64 for IPv6) per matched route rule,
+  shared by the whole app (150 requests / 5 min). Dedicated per-user write limits for content
+  endpoints are a LEX-017 follow-up.
+- **User text:** every free-text field goes through `boundedText` (`shared/schemas/text.ts`). It
+  applies NFC and trim, counts length in code points (the same unit as Postgres `char_length`),
+  rejects control characters, lone surrogates and invisible/bidi format characters (zero-width
+  space, RLO/LRI, BOM, TAG characters, line separators; ZWJ is allowed for emoji), and requires at
+  least one visible character.
+- **No XSS input filter on the API:** nuxt-security's `xssValidator` is off for `/api/**`. It
+  rejected legitimate text (passwords, "a < b"), only covered GET/POST, and gave unexplained 400s.
+  XSS is prevented by strict Zod input schemas, Vue output escaping, the `v-html`/`innerHTML` lint
+  bans and the nonce-only CSP. Stored payloads are checked in a real browser by the security tests.
 - **Lint guardrails:** inline `eslint-disable` comments are ignored (`noInlineConfig`). Rules ban
   `sql.raw` (under any alias), `db.execute(string)`, `v-html`/`:innerHTML`, DOM HTML sinks, `eval`,
   and non-literal dynamic `import()`.

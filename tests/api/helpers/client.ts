@@ -105,6 +105,9 @@ export class Client {
   post(path: string, json?: unknown, opts?: SendOptions) {
     return this.send('POST', path, { ...opts, ...(json !== undefined && { json }) })
   }
+  patch(path: string, json?: unknown, opts?: SendOptions) {
+    return this.send('PATCH', path, { ...opts, ...(json !== undefined && { json }) })
+  }
   delete(path: string, json?: unknown, opts?: SendOptions) {
     return this.send('DELETE', path, { ...opts, ...(json !== undefined && { json }) })
   }

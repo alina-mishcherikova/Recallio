@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { FormError, FormErrorEvent } from '@nuxt/ui'
-import { LANGUAGE_CODES, type LanguageCode } from '#shared/constants/languages'
+import type { LanguageCode } from '#shared/constants/languages'
 import { PASSWORD_MAX, PASSWORD_MIN, registerRequestSchema, timezoneSchema } from '#shared/schemas/auth'
 import type { SummaryItem } from '~/components/auth/FormErrorSummary.vue'
 
@@ -20,9 +20,6 @@ const PASSWORD_REQUIREMENTS = `Use ${PASSWORD_MIN} to ${PASSWORD_MAX} characters
 const route = useRoute()
 const { register } = useAuth()
 const handoff = useEmailHandoff()
-
-const languageNames = new Intl.DisplayNames(['en'], { type: 'language' })
-const languageItems = LANGUAGE_CODES.map((code) => ({ label: languageNames.of(code) ?? code, value: code }))
 
 const state = reactive<{ email: string; password: string; nativeLanguage: LanguageCode | undefined }>({
   email: '',
@@ -151,7 +148,7 @@ async function goToLogin() {
           <FormNativeSelect
             :id="FIELD_IDS.nativeLanguage"
             v-model="state.nativeLanguage"
-            :items="languageItems"
+            :items="LANGUAGE_ITEMS"
             placeholder="Choose a language"
           />
         </UFormField>

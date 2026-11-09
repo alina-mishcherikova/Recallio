@@ -5,6 +5,7 @@ import { createError, isError, type H3Error } from 'h3'
 import { ZodError, type z } from '../../shared/zod'
 import { LANGUAGE_MESSAGE } from '../../shared/constants/languages'
 import { AUTH_MESSAGES, PASSWORD_MESSAGES, type ApiError } from '../../shared/schemas/auth'
+import { COLLECTION_MESSAGES } from '../../shared/schemas/collections'
 
 export const PUBLIC_STATUSES = [400, 401, 403, 404, 405, 409, 413, 415, 429, 503] as const
 export type PublicStatus = (typeof PUBLIC_STATUSES)[number]
@@ -58,6 +59,7 @@ export function publicError(statusCode: PublicStatus, message?: string, issues?:
 const KNOWN_MESSAGES = new Set<string>([
   ...Object.values(AUTH_MESSAGES),
   ...Object.values(PASSWORD_MESSAGES),
+  ...Object.values(COLLECTION_MESSAGES),
   LANGUAGE_MESSAGE,
 ])
 

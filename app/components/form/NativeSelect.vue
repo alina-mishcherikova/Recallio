@@ -9,6 +9,7 @@ const props = defineProps<{
   id: string
   items: readonly { label: string; value: T }[]
   placeholder?: string
+  disabled?: boolean
 }>()
 
 const { id, name, disabled, ariaAttrs, emitFormBlur, emitFormFocus, emitFormChange, emitFormInput } =
